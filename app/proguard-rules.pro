@@ -1,0 +1,3 @@
+-dontwarn okhttp3.**
+-dontwarn coil.**
+-keep class com.teatv.app.data.** { *; }
