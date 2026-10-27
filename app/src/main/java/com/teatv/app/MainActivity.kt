@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Scaffold
 import com.teatv.app.screens.settings.AccountSettingsScreen
 import com.teatv.app.screens.settings.ClientSettingsScreen
-import com.teatv.app.screens.account.StreamerScreen
 import com.teatv.app.screens.settings.SettingsScreen
 import com.teatv.app.screens.settings.miniplayer.MiniPlayerOverlay
 import androidx.compose.ui.Modifier
@@ -93,6 +92,12 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         runCatching { unregisterReceiver(plugReceiver) }
         super.onDestroy()
+        if (vm.clientSettingsStore.killBackgroundProcesses) {
+            try {
+                stopService(Intent(this, FarmService::class.java))
+                stopService(Intent(this, TeaAudioService::class.java))
+            } catch (_: Exception) {}
+        }
     }
 
     private fun onHeadsetUnplugged() {
@@ -126,11 +131,10 @@ class MainActivity : ComponentActivity() {
                         vm.screen == Screen.Subscriptions ||
                         vm.screen == Screen.Settings ||
                         vm.screen == Screen.AccountSettings ||
-                        vm.screen == Screen.ClientSettings ||
-                        vm.screen == Screen.Streamer
+                        vm.screen == Screen.ClientSettings
             ) {
                 when (vm.screen) {
-                    Screen.Subscriptions, Screen.Streamer -> vm.backToAccount()
+                    Screen.Subscriptions -> vm.backToAccount()
                     Screen.Settings -> vm.openAccount()
                     Screen.AccountSettings, Screen.ClientSettings -> vm.openSettings()
                     else -> vm.backToHome()
@@ -221,7 +225,8 @@ class MainActivity : ComponentActivity() {
                                 onApproveUnban = vm::approveUnban,
                                 onDenyUnban = vm::denyUnban,
                                 onSendAnnounce = vm::sendAnnouncement,
-                                onPinMessage = vm::pinChatMessage
+                                onPinMessage = vm::pinChatMessage,
+                                onMinimize = vm::minimizeStream
                             )
                         }
 
@@ -229,14 +234,11 @@ class MainActivity : ComponentActivity() {
                             user = vm.user,
                             onBack = vm::backToHome,
                             onOpenChannel = { vm.user?.let { vm.openChannel(it.id) } },
-                            onOpenStreamer = vm::openStreamer,
                             onOpenSubscriptions = vm::openSubscriptions,
                             onOpenSettings = vm::openSettings
                         )
 
-                        Screen.Streamer -> StreamerScreen(
-                            onBack = vm::backToAccount
-                        )
+
 
                         Screen.Settings -> SettingsScreen(
                             onBack = vm::openAccount,

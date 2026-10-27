@@ -8,7 +8,16 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.roundToInt
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -159,10 +168,13 @@ fun StreamScreen(
     onDenyUnban: (UnbanRequestItem) -> Unit = {},
     onSendAnnounce: (String) -> Unit = {},
     onPinMessage: (ChatMessage) -> Unit = {},
-    bufferSeconds: Int = 15
+    bufferSeconds: Int = 15,
+    onMinimize: () -> Unit = {}
 ) {
     var showStats by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(false) }
+
+
     var showSettings by remember { mutableStateOf(false) }
     var showLeftDrawer by remember { mutableStateOf(false) }
     var showRightDrawer by remember { mutableStateOf(false) }
@@ -172,6 +184,22 @@ fun StreamScreen(
 
     val context = LocalContext.current
     val activity = context as? ComponentActivity
+
+    // Автоскрытие кнопок плеера через 3.5 секунды при просмотре
+    LaunchedEffect(showControls, playing) {
+        if (showControls && playing) {
+            kotlinx.coroutines.delay(3500)
+            showControls = false
+        }
+    }
+
+    // Блокировка отключения и затухания экрана во время просмотра стрима
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
     val isLandscape =
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val useFull = fullscreen && isLandscape
@@ -411,31 +439,71 @@ fun StreamScreen(
                     .imePadding()
             )
     ) {
-        StreamPlayerBox(
-            target = target,
-            player = player,
-            useFull = useFull,
-            audioOnly = viewMode == ViewMode.AudioOnly,
-            showControls = showControls,
-            playing = playing,
-            onToggleControls = { showControls = !showControls },
-            onTogglePlaying = {
-                playing = !playing
-                player.playWhenReady = playing
-            },
-            onShare = {
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(
-                    ClipData.newPlainText("teatv-stream", "https://www.twitch.tv/${target.login}")
-                )
-            },
-            onOpenSettings = { showSettings = true },
-            onRefresh = {
-                player.seekToDefaultPosition()
-                onRefresh()
-            },
-            onToggleFullscreen = { fullscreen = !fullscreen }
+        var swipeOffsetY by remember { mutableFloatStateOf(0f) }
+        val animatedSwipeOffsetY by animateFloatAsState(
+            targetValue = swipeOffsetY,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioLowBouncy,
+                stiffness = Spring.StiffnessMediumLow
+            ),
+            label = "streamSwipeDown"
         )
+
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(0, animatedSwipeOffsetY.roundToInt()) }
+                .graphicsLayer {
+                    val progress = (animatedSwipeOffsetY / 350f).coerceIn(0f, 1f)
+                    scaleX = 1f - progress * 0.12f
+                    scaleY = 1f - progress * 0.12f
+                    alpha = 1f - progress * 0.35f
+                }
+                .pointerInput(useFull) {
+                    if (useFull) return@pointerInput
+                    detectVerticalDragGestures(
+                        onDragStart = {},
+                        onDragEnd = {
+                            if (swipeOffsetY > 110f) {
+                                onMinimize()
+                            }
+                            swipeOffsetY = 0f
+                        },
+                        onDragCancel = { swipeOffsetY = 0f },
+                        onVerticalDrag = { change, dragAmount ->
+                            if (dragAmount > 0f || swipeOffsetY > 0f) {
+                                swipeOffsetY = (swipeOffsetY + dragAmount).coerceIn(0f, 300f)
+                                change.consume()
+                            }
+                        }
+                    )
+                }
+        ) {
+            StreamPlayerBox(
+                target = target,
+                player = player,
+                useFull = useFull,
+                audioOnly = viewMode == ViewMode.AudioOnly,
+                showControls = showControls,
+                playing = playing,
+                onToggleControls = { showControls = !showControls },
+                onTogglePlaying = {
+                    playing = !playing
+                    player.playWhenReady = playing
+                },
+                onShare = {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(
+                        ClipData.newPlainText("teatv-stream", "https://www.twitch.tv/${target.login}")
+                    )
+                },
+                onOpenSettings = { showSettings = true },
+                onRefresh = {
+                    player.seekToDefaultPosition()
+                    onRefresh()
+                },
+                onToggleFullscreen = { fullscreen = !fullscreen }
+            )
+        }
 
         if (!useFull) {
             StreamInfoPanel(

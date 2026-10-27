@@ -10,7 +10,9 @@ import com.teatv.app.auth.TwitchAuth
 import com.teatv.app.player.TwitchHls
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class TwitchRepository(
     private val api: TwitchApi,
@@ -296,8 +298,87 @@ class TwitchRepository(
         return ok
     }
 
-    suspend fun isFollowing(broadcasterId: String): Boolean =
-        api.isFollowing(getProfile().id, broadcasterId, helix())
+    suspend fun isFollowing(broadcasterId: String): Boolean = withContext(Dispatchers.IO) {
+
+        // 1. Проверяем кэш зафоловленных стримеров (мгновенно и надежно)
+
+        if (streamersCache?.any { it.id == broadcasterId } == true) return@withContext true
+
+
+
+        // 2. Helix /channels/followed
+
+        try {
+
+            val me = getProfile()
+
+            if (api.isFollowing(me.id, broadcasterId, helix())) return@withContext true
+
+        } catch (_: Exception) {}
+
+
+
+        // 3. Twitch GQL relationship
+
+        try {
+
+            val q = """{"query":"query { user(id: \"$broadcasterId\") { relationship { followedAt } } }"}"""
+
+            val resp = gql.queryWeb(q)
+
+            val rel = org.json.JSONObject(resp).optJSONObject("data")?.optJSONObject("user")?.optJSONObject("relationship")
+
+            if (rel != null && !rel.optString("followedAt").isNullOrBlank()) {
+
+                return@withContext true
+
+            }
+
+        } catch (_: Exception) {}
+
+
+
+        // 4. Полный список зафоловленных каналов
+
+        try {
+
+            val me = getProfile()
+
+            val follows = api.getFollowedChannels(me.id, helix())
+
+            if (follows.any { it.broadcasterId == broadcasterId }) return@withContext true
+
+        } catch (_: Exception) {}
+
+
+
+        false
+
+    }
+
+
+
+    suspend fun getFollowDate(broadcasterId: String): String? = withContext(Dispatchers.IO) {
+
+        try {
+
+            val me = getProfile()
+
+            val follows = api.getFollowedChannels(me.id, helix())
+
+            val f = follows.firstOrNull { it.broadcasterId == broadcasterId }
+
+            if (f != null && f.followedAt.isNotBlank()) {
+
+                return@withContext f.followedAt
+
+            }
+
+        } catch (_: Exception) {}
+
+        null
+
+    }
 
     fun invalidateStreamers() {
         streamersCache = null

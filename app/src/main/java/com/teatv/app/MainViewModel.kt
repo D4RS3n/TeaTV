@@ -71,7 +71,7 @@ import com.teatv.app.mod.RewardRequestItem
 import com.teatv.app.mod.UnbanRequestItem
 import com.teatv.app.screens.stream.mod.ModSliderAction
 
-enum class Screen { Auth, Home, Stream, Category, Account, Subscriptions, Channel, Vod, Settings, AccountSettings, ClientSettings, Streamer }
+enum class Screen { Auth, Home, Stream, Category, Account, Subscriptions, Channel, Vod, Settings, AccountSettings, ClientSettings }
 
 enum class MainTab { View, Search, Tools }
 
@@ -143,6 +143,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setSplitMessagesEnabled(enabled: Boolean) {
         isSplitMessagesActive = enabled
         clientSettingsStore.splitLongMessagesEnabled = enabled
+    }
+
+    var isKillBackgroundProcessesActive by mutableStateOf(clientSettingsStore.killBackgroundProcesses)
+        private set
+
+    fun setKillBackgroundProcesses(enabled: Boolean) {
+        isKillBackgroundProcessesActive = enabled
+        clientSettingsStore.killBackgroundProcesses = enabled
     }
 
     val chatMessages = mutableStateListOf<ChatMessage>()
@@ -401,9 +409,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         Toast.makeText(getApplication(), "+$amount баллов: $reason", Toast.LENGTH_SHORT).show()
                     }
                 },
-                onRedeem = { sender, title, icon, userInput ->
+                onRedeem = { id, sender, title, icon, userInput ->
+                    val msgId = if (id.isNotBlank()) "redeem-$id" else "redeem-${sender.hashCode()}-${title.hashCode()}-${System.currentTimeMillis() / 2000}"
                     val msg = ChatMessage(
-                        id = "redeem-${System.currentTimeMillis()}-${title.hashCode()}",
+                        id = msgId,
                         sender = sender,
                         color = "",
                         text = userInput.orEmpty(),
@@ -457,17 +466,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadVodChatAt(videoId: String, offsetSeconds: Int) {
-        // Не грузим, если уже загружено для этого времени (debounce)
-        if (kotlin.math.abs(offsetSeconds - lastVodChatOffset) < 10) return
+        if (lastVodChatOffset >= 0 && kotlin.math.abs(offsetSeconds - lastVodChatOffset) < 15) return
 
+        val isJump = lastVodChatOffset < 0 || kotlin.math.abs(offsetSeconds - lastVodChatOffset) > 45
         lastVodChatOffset = offsetSeconds
         viewModelScope.launch {
             try {
                 val (messages, _) = gql.getVodChatComments(videoId, offsetSeconds)
-                vodChatMessages = messages
+                if (isJump) {
+                    vodChatMessages = messages.sortedBy { it.offsetSeconds }
+                } else {
+                    val existingIds = vodChatMessages.map { it.id }.toSet()
+                    val newUnique = messages.filter { it.id !in existingIds }
+                    vodChatMessages = (vodChatMessages + newUnique).sortedBy { it.offsetSeconds }.takeLast(250)
+                }
             } catch (e: Exception) {
                 Log.e("TeaTV-VM", "vod chat load failed", e)
-                vodChatMessages = emptyList()
             }
         }
     }
@@ -613,9 +627,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.Settings
     }
 
-    fun openStreamer() {
-        screen = Screen.Streamer
-    }
+
 
     /** Выделение/снятие выделения сообщения и чаттера в чате. */
     fun toggleSelectChatMessage(m: ChatMessage) {
@@ -626,11 +638,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             selectedChatMessage = m
             val ch = currentStream ?: return
             viewModelScope.launch {
+
+                val isFollowed = targetFollowed ?: try { repository.isFollowing(ch.id) } catch (_: Exception) { null }
+
                 selectedChatterInfo = modRepository.fetchChatterInfo(
-                    userId = null,
-                    userLogin = m.sender,
-                    channelId = ch.id
+
+                    userId = m.senderId,
+
+                    userLogin = m.senderLogin ?: m.sender,
+
+                    channelId = ch.id,
+
+                    channelLogin = ch.login,
+
+                    myUserId = user?.id,
+
+                    myUserLogin = user?.login,
+
+                    isChannelFollowed = isFollowed
+
                 )
+
             }
         }
     }
@@ -1258,11 +1286,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             emotes = coroutineScope {
                 val token = tokenStore.helixToken.orEmpty()
                 val user = async {
-                    val subs = me?.let { api.getUserEmotes(it.id, token) } ?: emptyList()
+                    val subs = me?.let { api.getUserEmotes(it.id, token, subsOnly = true) } ?: emptyList()
                     val mine = me?.let { api.getChannelEmotes(it.id, token) } ?: emptyList()
-                    (subs + mine).distinctBy { it.code }
+
+                    val ownerIds = subs.mapNotNull { it.ownerId }.filter { it.isNotBlank() }.distinct()
+                    val knownNames = mutableMapOf<String, String>()
+                    mySubscriptions.forEach { knownNames[it.broadcasterId] = it.broadcasterName }
+                    streamers.forEach { knownNames[it.id] = it.name }
+                    if (me != null) knownNames[me.id] = me.displayName
+                    if (t.id.isNotBlank()) knownNames[t.id] = t.name
+
+                    val missingIds = ownerIds.filter { it !in knownNames }
+                    if (missingIds.isNotEmpty()) {
+                        try {
+                            missingIds.chunked(100).forEach { chunk ->
+                                val users = api.getUsersByIds(chunk, token)
+                                users.forEach { knownNames[it.id] = it.displayName }
+                            }
+                        } catch (_: Exception) {}
+                    }
+
+                    val enrichedSubs = subs
+                        .filter { !it.ownerId.isNullOrBlank() && it.ownerId != "0" }
+                        .map { e ->
+                            val chName = e.ownerId?.let { knownNames[it] } ?: e.channelName ?: "Подписки"
+                            e.copy(channelName = chName)
+                        }
+                    val enrichedMine = mine.map { e ->
+                        e.copy(channelName = me?.displayName ?: "Мой канал")
+                    }
+
+                    (enrichedSubs + enrichedMine).distinctBy { it.code }
                 }
-                val chan = async { api.getChannelEmotes(t.id, token) }
+                val chan = async {
+                    val list = api.getChannelEmotes(t.id, token)
+                    list.map { it.copy(channelName = t.name) }
+                }
                 val glob = async {
                     globalTwitchEmotesCache ?: api.getGlobalEmotes(token).also { globalTwitchEmotesCache = it }
                 }
@@ -1298,25 +1357,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val token = tokenStore.accessToken ?: return@launch
             if (PointsRepository.redeem(getApplication(), t.id, reward, userInput, token)) {
-                refreshPoints()
-                val me = try {
-                    repository.getProfile()
-                } catch (_: Exception) {
-                    null
-                }
-                val icon = points?.rewards?.firstOrNull { it.id == reward.id }?.imageUrl
-                insertMessage(ChatMessage(
-                    id = "redeem-${reward.id}-${System.currentTimeMillis()}",
-                    sender = me?.displayName ?: t.name,
-                    color = "",
-                    text = userInput.orEmpty(),
-                    badges = emptyList(),
-                    replyToId = null,
-                    replyToName = null,
-                    replyToBody = null,
-                    redemptionTitle = reward.title,
-                    redemptionIcon = icon
-                ))
+                refreshPoints(force = true)
             }
         }
     }
@@ -1607,29 +1648,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 screen = Screen.Auth
                 return@launch
             }
-            launch {
-                channel = try {
-                    repository.getMyChannel()
-                } catch (_: Exception) {
-                    null
-                }
+            // Оптимизация подгрузки: параллельная загрузка всех данных пачкой
+            val channelDeferred = async {
+                try { repository.getMyChannel() } catch (_: Exception) { null }
             }
-            launch {
-                streamers = try {
-                    repository.getFollowedStreamers()
-                } catch (_: Exception) {
-                    emptyList()
-                }
-                val favIds = favoritesStore.allIds()
-                favorites = streamers.filter { it.id in favIds }
+            val streamersDeferred = async {
+                try { repository.getFollowedStreamers() } catch (_: Exception) { emptyList() }
             }
-            launch {
-                categories = try {
-                    repository.getFollowedCategories()
-                } catch (_: Exception) {
-                    emptyList()
-                }
+            val categoriesDeferred = async {
+                try { repository.getFollowedCategories() } catch (_: Exception) { emptyList() }
             }
+
+            val newChannel = channelDeferred.await()
+            val newStreamers = streamersDeferred.await()
+            val newCategories = categoriesDeferred.await()
+            val favIds = favoritesStore.allIds()
+            val newFavorites = newStreamers.filter { it.id in favIds }
+
+            // Разовое, плавное обновление состояния в один кадр без ступенчатых скачков интерфейса
+            channel = newChannel
+            streamers = newStreamers
+            favorites = newFavorites
+            categories = newCategories
         }
     }
 }

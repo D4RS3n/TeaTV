@@ -14,6 +14,7 @@ object TeaColors {
     val DefaultTextSecondary = Color(0xFF949000)
     val DefaultAccent = Color(0xE6706300)
     val DefaultChatBg = Color(0xFF151009)
+    val DefaultModHighlight = Color(0xFF5A1E28)
     val Live = Color(0xFFEB0400)
 
     var Background by mutableStateOf(DefaultBackground)
@@ -22,6 +23,7 @@ object TeaColors {
     var TextSecondary by mutableStateOf(DefaultTextSecondary)
     var Accent by mutableStateOf(DefaultAccent)
     var ChatBg by mutableStateOf(DefaultChatBg)
+    var ModHighlight by mutableStateOf(DefaultModHighlight)
 
     fun applyFromStore(store: ClientSettingsStore) {
         Background = store.getSavedColor(ClientSettingsStore.COLOR_BG) ?: DefaultBackground
@@ -30,6 +32,7 @@ object TeaColors {
         TextSecondary = store.getSavedColor(ClientSettingsStore.COLOR_TEXT_SECONDARY) ?: DefaultTextSecondary
         Accent = store.getSavedColor(ClientSettingsStore.COLOR_ACCENT) ?: DefaultAccent
         ChatBg = store.getSavedColor(ClientSettingsStore.COLOR_CHAT_BG) ?: DefaultChatBg
+        ModHighlight = store.getSavedColor(ClientSettingsStore.COLOR_MOD_HIGHLIGHT) ?: DefaultModHighlight
     }
 
     fun resetToDefaults(store: ClientSettingsStore) {
@@ -40,5 +43,6 @@ object TeaColors {
         TextSecondary = DefaultTextSecondary
         Accent = DefaultAccent
         ChatBg = DefaultChatBg
+        ModHighlight = DefaultModHighlight
     }
 }

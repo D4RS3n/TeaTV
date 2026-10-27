@@ -37,12 +37,12 @@ class EmoteSpan(
     ): Int {
         if (fm != null) {
             val fontHeight = fm.descent - fm.ascent
-            val halfDiff = (sizePx - fontHeight) / 2
-            if (halfDiff > 0) {
-                fm.ascent -= halfDiff
-                fm.top -= halfDiff
-                fm.descent += halfDiff
-                fm.bottom += halfDiff
+            if (fontHeight < sizePx) {
+                val diff = sizePx - fontHeight
+                fm.ascent -= diff / 2
+                fm.top = fm.ascent
+                fm.descent += diff - (diff / 2)
+                fm.bottom = fm.descent
             }
         }
         return sizePx + 4
@@ -136,6 +136,9 @@ fun insertEmoteIntoEditText(
 
     editable.setSpan(span, tokenStart, tokenEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     editText.setSelection((tokenEnd + suffix.length).coerceAtMost(editable.length))
+    editText.post {
+        editText.bringPointIntoView(editText.selectionEnd)
+    }
 
     // Асинхронно загружаем изображение смайлика через Coil
     val imageLoader = Coil.imageLoader(context)

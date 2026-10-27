@@ -64,9 +64,12 @@ class TwitchApi(
             if (!resp.isSuccessful) return@withContext emptyList()
             val arr = JSONObject(text).optJSONArray("data")
                 ?: return@withContext emptyList()
-            List(arr.length()) { i ->
+            val list = mutableListOf<ChannelVideo>()
+            for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                ChannelVideo(
+                val viewable = o.optString("viewable", "public")
+                if (viewable.equals("sub_only", ignoreCase = true)) continue
+                list += ChannelVideo(
                     id = o.optString("id", ""),
                     title = o.optString("title", ""),
                     createdAt = o.optString("created_at", ""),
@@ -76,6 +79,7 @@ class TwitchApi(
                     url = o.optString("url", "")
                 )
             }
+            list
         }
     }
 
@@ -427,8 +431,8 @@ class TwitchApi(
         helixEmotes("chat/emotes/global", token)
 
     /** Смайлы пользователя (включая подписки), scope user:read:emotes. */
-    suspend fun getUserEmotes(userId: String, token: String): List<Emote> =
-        helixEmotes("chat/emotes/user?user_id=$userId", token, subsOnly = true)
+    suspend fun getUserEmotes(userId: String, token: String, subsOnly: Boolean = true): List<Emote> =
+        helixEmotes("chat/emotes/user?user_id=$userId", token, subsOnly = subsOnly)
 
     private suspend fun helixEmotes(
         path: String,
@@ -453,34 +457,45 @@ class TwitchApi(
                     for (i in 0 until arr.length()) {
                         val o = arr.getJSONObject(i)
 
-                        if (subsOnly) {
-                            val type = o.optJSONObject("emote_set")
-                                ?.optString("type")
-                                .orEmpty()
+                        val emoteType = o.optString("emote_type").ifBlank {
+                            o.optJSONObject("emote_set")?.optString("type").orEmpty()
+                        }
+                        val ownerId = o.optString("owner_id").ifBlank {
+                            if (path.contains("broadcaster_id=")) path.substringAfter("broadcaster_id=").substringBefore("&") else null
+                        }
 
-                            if (type !in setOf(
-                                    "subscriptions",
-                                    "prime",
-                                    "twofactor",
-                                    "limitedtime"
-                                )
-                            ) {
+                        if (subsOnly) {
+                            if (ownerId.isNullOrBlank() || ownerId == "0") {
+                                continue
+                            }
+                            if (emoteType.isNotBlank() && emoteType in setOf("globals", "smilies")) {
+                                continue
+                            }
+                            if (emoteType.isNotBlank() && emoteType !in setOf("subscriptions", "follower", "bitstier", "rewards", "hypetrain", "prime", "twofactor", "limitedtime")) {
                                 continue
                             }
                         }
 
                         val id = o.optString("id")
                         val img = o.optJSONObject("images")
+                        val code = o.optString("name")
+                        val url = if (id.isNotBlank()) {
+                            "https://static-cdn.jtvnw.net/emoticons/v2/$id/default/dark/2.0"
+                        } else {
+                            img?.optString("url_2x")?.takeIf { it.isNotBlank() } ?: img?.optString("url_1x").orEmpty()
+                        }
 
-                        out += Emote(
-                            code = o.optString("name"),
-                            url = if (id.isNotBlank()) {
-                                "https://static-cdn.jtvnw.net/emoticons/v2/$id/static/dark/2.0"
-                            } else {
-                                img?.optString("url_1x").orEmpty()
-                            },
-                            kind = EmoteKind.TWITCH
-                        )
+                        if (code.isNotBlank() && url.isNotBlank()) {
+                            val emote = Emote(
+                                code = code,
+                                url = url,
+                                kind = EmoteKind.TWITCH,
+                                ownerId = ownerId,
+                                emoteType = emoteType.takeIf { it.isNotBlank() }
+                            )
+                            out += emote
+                            com.teatv.app.chat.emotes.TwitchEmoteCache.put(code, url)
+                        }
                     }
 
                     out

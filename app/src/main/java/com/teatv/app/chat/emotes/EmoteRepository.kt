@@ -138,14 +138,44 @@ object EmoteRepository {
 
     private fun parseSeven(set: JSONObject?): List<Emote> {
         val arr = set?.optJSONArray("emotes") ?: return emptyList()
-        return List(arr.length()) { i ->
-            val e = arr.getJSONObject(i)
-            Emote(
-                code = e.optString("name"),
-                url = "https://cdn.7tv.app/emote/${e.optString("id")}/2x.webp",
-                kind = EmoteKind.SEVENTV
+        val out = mutableListOf<Emote>()
+        for (i in 0 until arr.length()) {
+            val e = arr.optJSONObject(i) ?: continue
+            val id = e.optString("id")
+            val name = e.optString("name")
+            val flags = e.optInt("flags", 0)
+            val dataObj = e.optJSONObject("data")
+            val dataFlags = dataObj?.optInt("flags", 0) ?: 0
+            val effectiveFlags = flags or dataFlags
+            // 7TV flag 1 = ZERO_WIDTH (overlay modifier)
+            val isZeroWidth = (effectiveFlags and 1) != 0
+
+            // Aspect ratio calculation
+            var ar = 1.0f
+            val host = dataObj?.optJSONObject("host")
+            val files = host?.optJSONArray("files")
+            if (files != null) {
+                for (j in 0 until files.length()) {
+                    val f = files.optJSONObject(j) ?: continue
+                    val w = f.optInt("width", 0)
+                    val h = f.optInt("height", 0)
+                    if (w > 0 && h > 0) {
+                        ar = w.toFloat() / h.toFloat()
+                        break
+                    }
+                }
+            }
+            if (ar <= 0.1f) ar = 1.0f
+
+            out += Emote(
+                code = name,
+                url = "https://cdn.7tv.app/emote/$id/2x.webp",
+                kind = EmoteKind.SEVENTV,
+                aspectRatio = ar,
+                isZeroWidth = isZeroWidth
             )
         }
+        return out
     }
 
     private fun getObject(url: String): JSONObject? {

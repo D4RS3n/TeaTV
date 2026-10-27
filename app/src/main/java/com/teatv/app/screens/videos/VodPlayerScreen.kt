@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -98,6 +99,8 @@ fun VodPlayerScreen(
     modifier: Modifier = Modifier
 ) {
     var showControls by remember { mutableStateOf(false) }
+
+
     var fullscreen by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(PlayerHolder.player?.playWhenReady ?: true) }
     var currentPosition by remember { mutableLongStateOf(0L) }
@@ -106,6 +109,22 @@ fun VodPlayerScreen(
 
     val context = LocalContext.current
     val activity = context as? ComponentActivity
+
+    // Автоскрытие элементов управления через 3.5 секунды
+    LaunchedEffect(showControls, playing) {
+        if (showControls && playing) {
+            kotlinx.coroutines.delay(3500)
+            showControls = false
+        }
+    }
+
+    // Защита от затухания и выключения экрана при просмотре VOD
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
     val isLandscape =
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val useFull = fullscreen && isLandscape
@@ -412,8 +431,17 @@ fun VodPlayerScreen(
                 vodTitle = title
             )
 
+            val currentSec = (currentPosition / 1000).toInt()
+            val visibleChatMessages = remember(chatMessages, currentSec) {
+                if (isClip) {
+                    chatMessages
+                } else {
+                    chatMessages.filter { it.offsetSeconds <= currentSec }.takeLast(100)
+                }
+            }
+
             ChatPanel(
-                messages = chatMessages,
+                messages = visibleChatMessages,
                 onSend = { _, _ -> },
                 emotes = emotes,
                 onPickEmote = {},
@@ -437,30 +465,40 @@ private fun VodSeekBar(
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val frac = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
     var widthPx by remember { mutableFloatStateOf(1f) }
-    val accent = TeaColors.TextPrimary
+    var isDragging by remember { mutableStateOf(false) }
+    var dragFrac by remember { mutableFloatStateOf(0f) }
 
-    fun seekAt(x: Float) {
-        if (duration <= 0) return
-        val f = (x.coerceIn(0f, widthPx) / widthPx)
-        onSeek((f * duration).toLong())
-    }
+    val actualFrac = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+    val displayFrac = if (isDragging) dragFrac else actualFrac
+    val accent = TeaColors.Accent
 
     Box(
         modifier = modifier
-            .height(28.dp)
+            .height(36.dp)
             .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
             .pointerInput(widthPx, duration) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    seekAt(down.position.x)
+                    if (duration > 0) {
+                        isDragging = true
+                        dragFrac = (down.position.x / widthPx).coerceIn(0f, 1f)
+                        down.consume()
+                    }
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull() ?: break
-                        if (!change.pressed) break
-                        seekAt(change.position.x)
-                        if (event.changes.any { it.isConsumed }) break
+                        if (!change.pressed) {
+                            if (isDragging && duration > 0) {
+                                onSeek((dragFrac * duration).toLong())
+                            }
+                            isDragging = false
+                            break
+                        }
+                        if (duration > 0) {
+                            dragFrac = (change.position.x / widthPx).coerceIn(0f, 1f)
+                            change.consume()
+                        }
                     }
                 }
             },
@@ -469,20 +507,23 @@ private fun VodSeekBar(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(2.dp)
-                .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(1.dp))
+                .height(if (isDragging) 4.dp else 3.dp)
+                .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(2.dp))
         )
         Box(
             Modifier
-                .fillMaxWidth(frac)
-                .height(2.dp)
-                .background(accent, RoundedCornerShape(1.dp))
+                .fillMaxWidth(displayFrac)
+                .height(if (isDragging) 4.dp else 3.dp)
+                .background(accent, RoundedCornerShape(2.dp))
         )
         Box(
             Modifier
-                .size(12.dp)
-                .offset { IntOffset(((widthPx * frac) - 6.dp.toPx()).roundToInt(), 0) }
-                .background(accent, CircleShape)
+                .size(if (isDragging) 16.dp else 12.dp)
+                .offset {
+                    val halfPx = (if (isDragging) 8.dp else 6.dp).toPx()
+                    IntOffset(((widthPx * displayFrac) - halfPx).roundToInt(), 0)
+                }
+                .background(Color.White, CircleShape)
         )
     }
 }

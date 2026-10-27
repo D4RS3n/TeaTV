@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
@@ -24,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.teatv.app.BuildConfig
 import com.teatv.app.R
 import com.teatv.app.data.TwitchUser
 import com.teatv.app.ui.theme.TeaColors
@@ -33,7 +35,6 @@ fun AccountScreen(
     user: TwitchUser?,
     onBack: () -> Unit,
     onOpenChannel: () -> Unit,
-    onOpenStreamer: () -> Unit,
     onOpenSubscriptions: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -43,6 +44,7 @@ fun AccountScreen(
             .fillMaxSize()
             .background(TeaColors.Background)
             .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(16.dp)
     ) {
         Row(
@@ -99,9 +101,20 @@ fun AccountScreen(
         Spacer(Modifier.height(32.dp))
 
         AccountMenuItem("Канал", onOpenChannel)
-        AccountMenuItem("Стримерская", onOpenStreamer)
         AccountMenuItem("Подписки", onOpenSubscriptions)
         AccountMenuItem("Настройки клиента", onOpenSettings)
+
+        Spacer(Modifier.weight(1f))
+
+        Text(
+            text = "TeaTV v${BuildConfig.VERSION_NAME}",
+            color = TeaColors.TextSecondary.copy(alpha = 0.5f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .padding(bottom = 12.dp)
+        )
     }
 }
 

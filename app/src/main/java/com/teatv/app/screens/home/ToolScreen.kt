@@ -21,6 +21,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -149,6 +153,103 @@ internal fun ToolsScreen(
                     )
                 )
             }
+        }
+
+        // Карточка: Полное завершение работы клиента
+        val context = androidx.compose.ui.platform.LocalContext.current
+        var showConfirmKillDialog by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(TeaColors.Surface)
+                .padding(16.dp)
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Принудительное завершение",
+                    color = TeaColors.TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "Мгновенно останавливает все фоновые процессы, авто-фарминг баллов, аудиоплеер и полностью выгружает процесс приложения из оперативной памяти.",
+                    color = TeaColors.TextSecondary,
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(12.dp))
+                androidx.compose.material3.Button(
+                    onClick = { showConfirmKillDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFDC2626)
+                    )
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_delete),
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Завершить работу приложения",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        if (showConfirmKillDialog) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showConfirmKillDialog = false },
+                title = {
+                    Text(
+                        "Завершить все процессы?",
+                        color = TeaColors.TextPrimary,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Text(
+                        "Приложение и все фоновые службы (фарминг, аудио) будут немедленно принудительно остановлены.",
+                        color = TeaColors.TextSecondary,
+                        fontSize = 13.sp
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            showConfirmKillDialog = false
+                            runCatching { context.stopService(android.content.Intent(context, com.teatv.app.FarmService::class.java)) }
+                            runCatching { context.stopService(android.content.Intent(context, com.teatv.app.TeaAudioService::class.java)) }
+                            com.teatv.app.player.PlayerHolder.player?.release()
+                            com.teatv.app.player.PlayerHolder.player = null
+                            android.os.Process.killProcess(android.os.Process.myPid())
+                            kotlin.system.exitProcess(0)
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFDC2626)
+                        )
+                    ) {
+                        Text("Завершить", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = { showConfirmKillDialog = false }
+                    ) {
+                        Text("Отмена", color = TeaColors.TextSecondary)
+                    }
+                },
+                containerColor = TeaColors.Surface
+            )
         }
     }
 }

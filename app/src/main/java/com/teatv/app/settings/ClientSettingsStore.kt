@@ -43,6 +43,16 @@ class ClientSettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_SPLIT_LONG_MESSAGES, true)
         set(value) = prefs.edit().putBoolean(KEY_SPLIT_LONG_MESSAGES, value).apply()
 
+    /** Вкл/выкл тактильный виброотклик (при redeem, модераторских свайпах и т.д.). */
+    var hapticFeedbackEnabled: Boolean
+        get() = prefs.getBoolean(KEY_HAPTIC_FEEDBACK_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_HAPTIC_FEEDBACK_ENABLED, value).apply()
+
+    /** Завершение фоновых процессов (фарм, службы) при закрытии / выходе из приложения. */
+    var killBackgroundProcesses: Boolean
+        get() = prefs.getBoolean(KEY_KILL_BACKGROUND_PROCESSES, false)
+        set(value) = prefs.edit().putBoolean(KEY_KILL_BACKGROUND_PROCESSES, value).apply()
+
     fun getSavedColor(key: String): Color? {
         if (!prefs.contains(key)) return null
         val argb = prefs.getInt(key, 0)
@@ -61,6 +71,7 @@ class ClientSettingsStore(context: Context) {
             .remove(COLOR_CHAT_BG)
             .remove(COLOR_TEXT_PRIMARY)
             .remove(COLOR_TEXT_SECONDARY)
+            .remove(COLOR_MOD_HIGHLIGHT)
             .apply()
     }
 
@@ -102,28 +113,42 @@ class ClientSettingsStore(context: Context) {
             surface = surface.toArgb(),
             chatBg = chatBg.toArgb(),
             textPrimary = textPrimary.toArgb(),
-            textSecondary = textSecondary.toArgb(),
-            isBuiltIn = false
+            textSecondary = textSecondary.toArgb()
         )
-        val current = getCustomThemes().toMutableList()
-        current.add(theme)
-        saveCustomThemesList(current)
+        val themes = getCustomThemes().toMutableList()
+        themes.add(theme)
+        saveCustomThemes(themes)
         return theme
+    }
+
+    fun updateTheme(theme: CustomTheme) {
+        val themes = getCustomThemes().toMutableList()
+        val index = themes.indexOfFirst { it.id == theme.id }
+        if (index != -1) {
+            themes[index] = theme
+            saveCustomThemes(themes)
+        }
+    }
+
+    fun deleteTheme(themeId: String) {
+        val themes = getCustomThemes().toMutableList()
+        themes.removeAll { it.id == themeId }
+        saveCustomThemes(themes)
     }
 
     fun renameCustomTheme(id: String, newName: String) {
         val current = getCustomThemes().map {
             if (it.id == id) it.copy(name = newName.trim().ifEmpty { it.name }) else it
         }
-        saveCustomThemesList(current)
+        saveCustomThemes(current)
     }
 
     fun deleteCustomTheme(id: String) {
         val current = getCustomThemes().filterNot { it.id == id }
-        saveCustomThemesList(current)
+        saveCustomThemes(current)
     }
 
-    private fun saveCustomThemesList(themes: List<CustomTheme>) {
+    private fun saveCustomThemes(themes: List<CustomTheme>) {
         val array = JSONArray()
         themes.forEach { array.put(it.toJson()) }
         prefs.edit().putString(KEY_SAVED_THEMES, array.toString()).apply()
@@ -161,6 +186,8 @@ class ClientSettingsStore(context: Context) {
         private const val KEY_VIDEO_BUFFER_SECONDS = "video_buffer_seconds"
         private const val KEY_MOD_MODE_ENABLED = "mod_mode_enabled"
         private const val KEY_SPLIT_LONG_MESSAGES = "split_long_messages_enabled"
+        private const val KEY_HAPTIC_FEEDBACK_ENABLED = "haptic_feedback_enabled"
+        private const val KEY_KILL_BACKGROUND_PROCESSES = "kill_background_processes"
         private const val KEY_SAVED_THEMES = "saved_custom_themes"
 
         const val COLOR_ACCENT = "color_accent"
@@ -169,5 +196,6 @@ class ClientSettingsStore(context: Context) {
         const val COLOR_CHAT_BG = "color_chat_bg"
         const val COLOR_TEXT_PRIMARY = "color_text_primary"
         const val COLOR_TEXT_SECONDARY = "color_text_secondary"
+        const val COLOR_MOD_HIGHLIGHT = "color_mod_highlight"
     }
 }

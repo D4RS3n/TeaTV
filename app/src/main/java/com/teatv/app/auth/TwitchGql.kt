@@ -437,6 +437,18 @@ class TwitchGql(
         return null
     }
 
+    private val NickColors = listOf(
+        "#E91E63", "#9C27B0", "#673AB7", "#3F51B5", "#2196F3",
+        "#03A9F4", "#00BCD4", "#009688", "#4CAF50", "#8BC34A",
+        "#FF9800", "#FF5722", "#F44336", "#26A69A", "#AB47BC"
+    )
+
+    private fun resolveNickColor(sender: String, rawColor: String?): String {
+        if (!rawColor.isNullOrBlank()) return rawColor
+        val idx = kotlin.math.abs(sender.hashCode()) % NickColors.size
+        return NickColors[idx]
+    }
+
     /** Чат VOD по таймкоду: каскад GQL(web) → REST v5. */
     suspend fun getVodChatComments(
         videoId: String,
@@ -445,7 +457,7 @@ class TwitchGql(
         // Ветка 1: GQL через веб-ключ.
         try {
             val r = queryWeb(
-                """{"query":"query VideoCommentsByOffset(${'$'}id: ID!, ${'$'}off: Int!) { video(id: ${'$'}id) { comments(contentOffsetSeconds: ${'$'}off, first: 30) { edges { node { id commenter { displayName } message { fragments { text } } } } } } }","variables":{"id":"$videoId","off":$contentOffsetSeconds}}"""
+                """{"query":"query VideoCommentsByOffset(${'$'}id: ID!, ${'$'}off: Int!) { video(id: ${'$'}id) { comments(contentOffsetSeconds: ${'$'}off, first: 50) { edges { node { id contentOffsetSeconds commenter { displayName } message { userColor fragments { text } } } } } } }","variables":{"id":"$videoId","off":$contentOffsetSeconds}}"""
             )
             if (!r.contains("\"errors\"")) {
                 val edges = JSONObject(r).optJSONObject("data")
@@ -464,19 +476,23 @@ class TwitchGql(
                                 }
                             }
                         }
+                        val sender = node.optJSONObject("commenter")?.optString("displayName") ?: "Unknown"
+                        val userColor = node.optJSONObject("message")?.optString("userColor")
+                        val offSec = node.optInt("contentOffsetSeconds", contentOffsetSeconds)
                         out += ChatMessage(
                             id = node.optString("id"),
-                            sender = node.optJSONObject("commenter")?.optString("displayName") ?: "Unknown",
-                            color = "",
+                            sender = sender,
+                            color = resolveNickColor(sender, userColor),
                             text = text,
                             badges = emptyList(),
                             replyToId = null,
                             replyToName = null,
-                            replyToBody = null
+                            replyToBody = null,
+                            offsetSeconds = offSec
                         )
                     }
                     if (out.isNotEmpty()) {
-                        Log.i("TeaTV-GQL", "vod chat ok via gql")
+                        Log.i("TeaTV-GQL", "vod chat ok via gql (${out.size} msgs)")
                         return out to null
                     }
                 }
@@ -517,18 +533,22 @@ class TwitchGql(
                             }
                         }
                     }
+                    val sender = c.optJSONObject("commenter")?.optString("display_name") ?: "Unknown"
+                    val userColor = c.optJSONObject("message")?.optString("user_color")
+                    val offSec = c.optDouble("content_offset_seconds", contentOffsetSeconds.toDouble()).toInt()
                     out += ChatMessage(
                         id = c.optString("_id"),
-                        sender = c.optJSONObject("commenter")?.optString("display_name") ?: "Unknown",
-                        color = "",
+                        sender = sender,
+                        color = resolveNickColor(sender, userColor),
                         text = text,
                         badges = emptyList(),
                         replyToId = null,
                         replyToName = null,
-                        replyToBody = null
+                        replyToBody = null,
+                        offsetSeconds = offSec
                     )
                 }
-                Log.i("TeaTV-GQL", "vod chat ok via v5")
+                Log.i("TeaTV-GQL", "vod chat ok via v5 (${out.size} msgs)")
                 out to null
             }
         } catch (e: Exception) {

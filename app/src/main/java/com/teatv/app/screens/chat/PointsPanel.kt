@@ -1,5 +1,7 @@
 package com.teatv.app.ui.screens.chat
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -29,24 +31,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.teatv.app.R
 import com.teatv.app.chat.points.ChannelPointsState
 import com.teatv.app.chat.points.PointReward
 import com.teatv.app.ui.theme.TeaColors
-import coil.request.ImageRequest
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,9 +63,30 @@ fun PointsPanel(
     onDismiss: () -> Unit,
     isBot: Boolean,
     onBotToggle: (Boolean) -> Unit,
+    hapticFeedbackEnabled: Boolean = true
 ) {
     var inputTarget by remember { mutableStateOf<PointReward?>(null) }
     var inputText by remember { mutableStateOf("") }
+    var isBlinking by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+
+    val headerBg by animateColorAsState(
+        targetValue = if (isBlinking) TeaColors.Accent.copy(alpha = 0.5f) else TeaColors.Surface,
+        animationSpec = tween(durationMillis = 350)
+    )
+
+    val triggerRedeem: (PointReward, String?) -> Unit = { reward, input ->
+        if (hapticFeedbackEnabled) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+        scope.launch {
+            isBlinking = true
+            delay(400)
+            isBlinking = false
+        }
+        onRedeem(reward, input)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -69,7 +97,7 @@ fun PointsPanel(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(TeaColors.Surface, RoundedCornerShape(12.dp))
+                    .background(headerBg, RoundedCornerShape(12.dp))
                     .padding(12.dp)
             ) {
                 PointIcon(state.iconUrl, 32)
@@ -123,7 +151,7 @@ fun PointsPanel(
                             inputTarget = r
                             inputText = ""
                         } else {
-                            onRedeem(r, null)
+                            triggerRedeem(r, null)
                         }
                     }
                 }
@@ -157,7 +185,7 @@ fun PointsPanel(
                 TextButton(
                     enabled = !(target.isUserInputRequired && inputText.isBlank()),
                     onClick = {
-                        onRedeem(target, inputText.takeIf { it.isNotBlank() })
+                        triggerRedeem(target, inputText.takeIf { it.isNotBlank() })
                         inputTarget = null
                     }
                 ) {
@@ -180,56 +208,53 @@ private fun RewardRow(
     onRedeem: () -> Unit
 ) {
     val dim = r.isPaused || r.isOutOfStock
-    val affordable = balance != null && balance >= r.cost
+    val affordable = balance == null || balance >= r.cost
+    val enabled = !dim && affordable
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
-            .alpha(if (dim) 0.4f else 1f)
-            .clickable(enabled = !dim) { onRedeem() }
-            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(TeaColors.Surface)
+            .clickable(enabled = enabled) { onRedeem() }
+            .padding(12.dp)
+            .alpha(if (enabled) 1f else 0.45f)
     ) {
-        if (r.imageUrl != null) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(r.imageUrl)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = null,
-                modifier = Modifier.size(36.dp)
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(parseColorSafe(r.backgroundColor))
-            )
-        }
-        Spacer(Modifier.width(10.dp))
+        PointIcon(r.imageUrl, 28)
+        Spacer(Modifier.width(12.dp))
         Text(
             text = r.title,
             color = TeaColors.TextPrimary,
             fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f)
         )
-        Text(
-            text = String.format("%,d", r.cost).replace(',', ' '),
-            color = if (affordable) TeaColors.Accent else TeaColors.TextSecondary,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold
-        )
+        Spacer(Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .background(TeaColors.Background, CircleShape)
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Text(
+                text = String.format("%,d", r.cost).replace(',', ' '),
+                color = if (affordable) TeaColors.Accent else TeaColors.TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
 @Composable
-fun PointIcon(url: String?, sizeDp: Int) {
-    if (url != null) {
+internal fun PointIcon(url: String?, sizeDp: Int) {
+    val context = LocalContext.current
+    if (!url.isNullOrBlank()) {
         AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
+            model = ImageRequest.Builder(context)
                 .data(url)
-                .crossfade(true)
+                .size(64, 64)
+                .crossfade(false)
                 .build(),
             contentDescription = null,
             contentScale = ContentScale.Fit,
@@ -243,10 +268,4 @@ fun PointIcon(url: String?, sizeDp: Int) {
             modifier = Modifier.size(sizeDp.dp)
         )
     }
-}
-
-private fun parseColorSafe(hex: String?): Color = try {
-    if (hex.isNullOrBlank()) TeaColors.Surface else Color(android.graphics.Color.parseColor(hex))
-} catch (_: Exception) {
-    TeaColors.Surface
 }

@@ -62,6 +62,7 @@ internal fun StreamPlayerBox(
                     useController = false
                     setPlayer(player)
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    keepScreenOn = true
                 }
             },
             modifier = Modifier.fillMaxSize()

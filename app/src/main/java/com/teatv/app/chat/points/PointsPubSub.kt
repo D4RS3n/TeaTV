@@ -36,6 +36,9 @@ object PointsPubSub {
     private var pingJob: Job? = null
     private var manualStop = false
     private var params: Params? = null
+    private val recentRedeemIds = java.util.Collections.newSetFromMap(
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    )
 
     private data class Params(
         val client: OkHttpClient,
@@ -43,7 +46,7 @@ object PointsPubSub {
         val channelId: String,
         val onMoment: (String) -> Unit,
         val onDelta: (Int, String) -> Unit,
-        val onRedeem: (String, String, String?, String?) -> Unit,
+        val onRedeem: (String, String, String, String?, String?) -> Unit,
         val onPinned: ((PinnedMessage?) -> Unit)? = null
     )
 
@@ -53,7 +56,7 @@ object PointsPubSub {
         channelId: String,
         onMoment: (String) -> Unit,
         onDelta: (Int, String) -> Unit,
-        onRedeem: (String, String, String?, String?) -> Unit,
+        onRedeem: (String, String, String, String?, String?) -> Unit,
         onPinned: ((PinnedMessage?) -> Unit)? = null
     ) {
         stop()
@@ -66,6 +69,7 @@ object PointsPubSub {
     fun stop() {
         manualStop = true
         params = null
+        recentRedeemIds.clear()
         pingJob?.cancel()
         pingJob = null
         socket?.close(1000, "bye")
@@ -103,27 +107,26 @@ object PointsPubSub {
                         )
                     }.toString()
                     webSocket.send(listen)
-                    pingJob = scope.launch {
-                        while (isActive) {
-                            delay(240_000)
-                            webSocket.send(JSONObject().put("type", "PING").toString())
-                        }
-                    }
+                    startPing(webSocket)
                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
-                    val json = JSONObject(text)
-                    when (json.optString("type")) {
-                        "MESSAGE" -> handle(
-                            p,
-                            json.optJSONObject("data")?.optString("message").orEmpty()
-                        )
-                        "RECONNECT" -> webSocket.close(1000, "reconnect")
+                    val root = JSONObject(text)
+                    when (root.optString("type")) {
+                        "MESSAGE" -> {
+                            val data = root.optJSONObject("data")
+                            val rawMsg = data?.optString("message").orEmpty()
+                            handle(p, rawMsg)
+                        }
+                        "PONG" -> { }
+                        "RECONNECT" -> {
+                            webSocket.close(1000, "reconnect requested")
+                        }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "parse failed", e)
+                    Log.w(TAG, "parse error: ${e.message}")
                 }
             }
 
@@ -168,14 +171,19 @@ object PointsPubSub {
             }
             "reward-redeemed" -> {
                 val redemption = msg.optJSONObject("data")?.optJSONObject("redemption")
+                val redemptionId = redemption?.optString("id").orEmpty()
+                if (redemptionId.isNotBlank() && !recentRedeemIds.add(redemptionId)) {
+                    // Исключаем дубликаты событий (одинаковое событие приходит в user и channel топики)
+                    return
+                }
                 val sender = redemption?.optJSONObject("user")?.optString("display_name").orEmpty()
                 val reward = redemption?.optJSONObject("reward")
                 val title = reward?.optString("title").orEmpty()
                 val icon = reward?.optJSONObject("image")?.optString("url_1x")
                     ?: reward?.optJSONObject("default_image")?.optString("url_1x")
                 val userInput = redemption?.optString("user_input").orEmpty().takeIf { it.isNotBlank() }
-                Log.i(TAG, "reward-redeemed: $sender -> $title")
-                onMain { p.onRedeem(sender, title, icon, userInput) }
+                Log.i(TAG, "reward-redeemed: $sender -> $title (id=$redemptionId)")
+                onMain { p.onRedeem(redemptionId, sender, title, icon, userInput) }
             }
             "pin-message" -> {
                 val data = msg.optJSONObject("data")
@@ -199,24 +207,29 @@ object PointsPubSub {
                         text = text,
                         pinnedBy = pinnedBy.ifBlank { "Модератор" }
                     )
-                    Log.i(TAG, "pin-message: @$sender: $text (by $pinnedBy)")
                     onMain { p.onPinned?.invoke(pm) }
                 }
             }
             "unpin-message" -> {
-                Log.i(TAG, "unpin-message received")
                 onMain { p.onPinned?.invoke(null) }
             }
         }
     }
 
+    private fun startPing(ws: WebSocket) {
+        pingJob?.cancel()
+        pingJob = scope.launch {
+            while (isActive) {
+                delay(4 * 60 * 1000)
+                val ping = JSONObject().put("type", "PING").toString()
+                ws.send(ping)
+            }
+        }
+    }
+
     private fun fetchUserId(client: OkHttpClient, token: String): String? {
-        val body = JSONObject()
-            .put("query", "query TeaMe { currentUser { id } }")
-            .toString()
+        val body = """{"query":"query { currentUser { id } }"}"""
         val json = PointsRepository.postGqlPublic(body, token) ?: return null
-        return json.optJSONObject("data")?.optJSONObject("currentUser")
-            ?.optString("id")
-            ?.takeIf { it.isNotBlank() }
+        return json.optJSONObject("data")?.optJSONObject("currentUser")?.optString("id")
     }
 }

@@ -57,10 +57,10 @@ fun ColorPickerDialog(
         array
     }
 
-    var hue by remember { mutableFloatStateOf(hsv[0]) }
-    var sat by remember { mutableFloatStateOf(hsv[1]) }
-    var value by remember { mutableFloatStateOf(hsv[2]) }
-    var alpha by remember { mutableFloatStateOf(initialColor.alpha) }
+    var hue by remember(initialColor) { mutableFloatStateOf(hsv[0]) }
+    var sat by remember(initialColor) { mutableFloatStateOf(hsv[1]) }
+    var value by remember(initialColor) { mutableFloatStateOf(hsv[2]) }
+    var alpha by remember(initialColor) { mutableFloatStateOf(initialColor.alpha) }
 
     fun currentColor(): Color {
         val argb = android.graphics.Color.HSVToColor((alpha * 255).roundToInt(), floatArrayOf(hue, sat, value))
@@ -142,14 +142,15 @@ fun ColorPickerDialog(
                         .clip(RoundedCornerShape(8.dp))
                         .border(1.dp, TeaColors.TextSecondary.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
                 ) {
+                    // Прямой спектр от 0 до 360 градусов (Красный -> Желтый -> Зеленый -> Голубой -> Синий -> Пурпурный -> Красный)
                     val rainbow = remember {
                         listOf(
                             Color.Red,
-                            Color.Magenta,
-                            Color.Blue,
-                            Color.Cyan,
-                            Color.Green,
                             Color.Yellow,
+                            Color.Green,
+                            Color.Cyan,
+                            Color.Blue,
+                            Color.Magenta,
                             Color.Red
                         )
                     }
@@ -203,37 +204,45 @@ fun ColorPickerDialog(
 
             Spacer(Modifier.height(16.dp))
 
-            // Превью текущего цвета и Hex-код
+            // Предпросмотр выбранного цвета и кнопки
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(currentColor())
-                            .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape)
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    val hexStr = String.format("#%08X", currentColor().toArgb())
-                    Text(
-                        text = hexStr,
-                        color = TeaColors.TextPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                    )
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(currentColor())
+                        .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape)
+                )
+
+                Spacer(Modifier.width(12.dp))
+
+                Text(
+                    text = String.format("#%08X", currentColor().toArgb()),
+                    color = TeaColors.TextSecondary,
+                    fontSize = 12.sp
+                )
+
+                Spacer(Modifier.weight(1f))
+
+                TextButton(onClick = onDismiss) {
+                    Text("Отмена", color = TeaColors.TextSecondary)
                 }
 
-                Row {
-                    TextButton(onClick = onDismiss) {
-                        Text("Отмена", color = TeaColors.TextSecondary)
+                Spacer(Modifier.width(8.dp))
+
+                TextButton(
+                    onClick = {
+                        onColorSelected(currentColor())
                     }
-                    TextButton(onClick = { onColorSelected(currentColor()) }) {
-                        Text("Выбрать", color = TeaColors.Accent, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                    }
+                ) {
+                    Text(
+                        "Выбрать",
+                        color = TeaColors.Accent,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    )
                 }
             }
         }

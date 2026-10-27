@@ -14,5 +14,6 @@ data class ChatMessage(
     val redemptionIcon: String? = null,
     val senderId: String? = null,
     val senderLogin: String? = null,
-    val twitchEmotes: Map<String, String> = emptyMap()
+    val twitchEmotes: Map<String, String> = emptyMap(),
+    val offsetSeconds: Int = 0
 )

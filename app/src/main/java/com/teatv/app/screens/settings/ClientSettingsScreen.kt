@@ -260,6 +260,16 @@ fun ClientSettingsScreen(
                         colorPickerSupportsAlpha = false
                     }
                 )
+                PaletteColorRow(
+                    name = "Цвет выделения модерации",
+                    description = "Цвет подсветки сообщения при выборе и свайпе",
+                    color = TeaColors.ModHighlight,
+                    onClick = {
+                        colorPickerTarget = "Цвет выделения модерации" to TeaColors.ModHighlight
+                        colorPickerKey = ClientSettingsStore.COLOR_MOD_HIGHLIGHT
+                        colorPickerSupportsAlpha = false
+                    }
+                )
 
                 Spacer(Modifier.height(6.dp))
 
@@ -277,6 +287,43 @@ fun ClientSettingsScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                     }
+                }
+            }
+
+            // Секция: Тактильный отклик и вибрация
+            SettingsCard(title = "Тактильный отклик и вибрация") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Вибрация при действиях",
+                            color = TeaColors.TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "Легкий виброотклик при наградах за баллы, свайпах модератора и переключениях",
+                            color = TeaColors.TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    var hapticEnabled by remember { mutableStateOf(clientSettingsStore.hapticFeedbackEnabled) }
+                    Switch(
+                        checked = hapticEnabled,
+                        onCheckedChange = { enabled ->
+                            hapticEnabled = enabled
+                            clientSettingsStore.hapticFeedbackEnabled = enabled
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = TeaColors.Accent,
+                            uncheckedThumbColor = TeaColors.TextSecondary,
+                            uncheckedTrackColor = TeaColors.Background
+                        )
+                    )
                 }
             }
 

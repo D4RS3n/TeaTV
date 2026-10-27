@@ -2,6 +2,7 @@ package com.teatv.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +29,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.ui.res.painterResource
 import com.teatv.app.R
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
@@ -266,57 +269,91 @@ private fun TagChip(text: String) {
 
 @Composable
 private fun CategoryStreamerRow(s: StreamerItem, onClick: () -> Unit) {
+    val previewUrl = remember(s.stream?.thumbnailUrl) {
+        s.stream?.thumbnailUrl
+            ?.replace("{width}", "360")
+            ?.replace("{height}", "202")
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AsyncImage(
-            model = s.avatarUrl,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
+        // Превью трансляции
+        Box(
             modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
+                .width(120.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(8.dp))
                 .background(TeaColors.Surface)
-        )
+        ) {
+            if (!previewUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = previewUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            // LIVE бейдж и зрители поверх превью
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(TeaColors.Live, CircleShape)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = formatCount(s.stream?.viewerCount ?: 0),
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
         Spacer(Modifier.width(12.dp))
+
+        // Данные канала
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = s.name,
-                    color = TeaColors.TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
+                AsyncImage(
+                    model = s.avatarUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(TeaColors.Surface)
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "LIVE",
+                    text = s.name,
                     color = TeaColors.TextPrimary,
-                    fontSize = 10.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .background(TeaColors.Live, CircleShape)
-                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
-                text = "${s.stream?.title ?: ""}",
+                text = s.stream?.title ?: "не в сети",
                 color = TeaColors.TextSecondary,
                 fontSize = 12.sp,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = "${s.stream?.viewerCount ?: 0} зрителей",
-                color = TeaColors.TextSecondary,
-                fontSize = 11.sp
             )
         }
     }
