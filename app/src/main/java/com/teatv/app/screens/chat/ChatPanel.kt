@@ -252,7 +252,9 @@ fun ChatPanel(
 
     onHidePinnedMessage: () -> Unit = {},
 
-    onUnpinMessage: () -> Unit = {}
+    onUnpinMessage: () -> Unit = {},
+
+    onUserClick: ((ChatMessage) -> Unit)? = null
 
 ) {
 
@@ -490,7 +492,9 @@ fun ChatPanel(
 
                             onModAction = {},
 
-                            onReply = {}
+                            onReply = {},
+
+                            onUserClick = { onUserClick?.invoke(m) }
 
                         )
 
@@ -516,7 +520,9 @@ fun ChatPanel(
 
                             onModAction = { action -> onModSliderAction?.invoke(m, action) },
 
-                            onReply = { replyTo = m }
+                            onReply = { replyTo = m },
+
+                            onUserClick = { onUserClick?.invoke(m) }
 
                         )
 
@@ -1129,13 +1135,16 @@ private fun MessageRow(
 
     onModAction: (ModSliderAction) -> Unit = {},
 
-    onReply: (ChatMessage) -> Unit
+    onReply: (ChatMessage) -> Unit,
+
+    onUserClick: () -> Unit = {}
 
 ) {
 
     val density = LocalDensity.current
 
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
 
     var drag by remember { mutableFloatStateOf(0f) }
 
@@ -1161,9 +1170,9 @@ private fun MessageRow(
 
         hasTriggerWord -> replySettings.highlightColor.copy(alpha = replySettings.highlightAlpha)
 
-        isReply -> TeaColors.Surface
+        isReply -> TeaColors.Surface.copy(alpha = 0.5f)
 
-        else -> TeaColors.ChatBg
+        else -> Color.Transparent
 
     }
 
@@ -1173,9 +1182,37 @@ private fun MessageRow(
 
             currentModAction.color.copy(alpha = 0.22f)
 
-        else -> TeaColors.Surface.copy(alpha = 0.55f)
+        drag != 0f -> TeaColors.Surface.copy(alpha = 0.55f)
+
+        else -> Color.Transparent
 
     }
+
+    val (ann, inline) = remember(m.id, lookup, badgeMap, fontSizeSp, m.twitchEmotes) {
+
+        buildMessageAnnotated(
+
+            m.sender,
+
+            nickColor(m.color),
+
+            m.text,
+
+            TeaColors.TextPrimary,
+
+            lookup,
+
+            badgeUrls = m.badges.mapNotNull { badgeMap[it] },
+
+            fontSizeSp = fontSizeSp,
+
+            messageEmotes = m.twitchEmotes
+
+        )
+
+    }
+
+    var textLayoutResult by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
 
     Box(
 
@@ -1183,7 +1220,7 @@ private fun MessageRow(
 
             .fillMaxWidth()
 
-            .defaultMinSize(minHeight = 34.dp)
+            .defaultMinSize(minHeight = if (drag != 0f) 34.dp else 0.dp)
 
             .background(trackBg, RoundedCornerShape(6.dp))
 
@@ -1373,13 +1410,51 @@ private fun MessageRow(
 
                     detectTapGestures(
 
+                        onDoubleTap = {
+
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+
+                            val clip = android.content.ClipData.newPlainText("chat_message", m.text)
+
+                            clipboard?.setPrimaryClip(clip)
+
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                            android.widget.Toast.makeText(context, "Сообщение скопировано", android.widget.Toast.LENGTH_SHORT).show()
+
+                        },
+
+                        onTap = { offset ->
+
+                            textLayoutResult?.let { layout ->
+
+                                val charOffset = layout.getOffsetForPosition(offset)
+
+                                val nickAnn = ann.getStringAnnotations("NICKNAME", charOffset, charOffset).firstOrNull()
+
+                                if (nickAnn != null) {
+
+                                    onUserClick()
+
+                                }
+
+                            }
+
+                        },
+
                         onLongPress = { onLongPress() }
 
                     )
 
                 }
 
-                .background(rowBackground, RoundedCornerShape(6.dp))
+                .background(
+
+                    rowBackground,
+
+                    if (rowBackground != Color.Transparent) RoundedCornerShape(6.dp) else androidx.compose.ui.graphics.RectangleShape
+
+                )
 
                 .padding(vertical = 1.dp, horizontal = 4.dp)
 
@@ -1425,35 +1500,13 @@ private fun MessageRow(
 
                 }
 
-                val (ann, inline) = remember(m.id, lookup, badgeMap, fontSizeSp, m.twitchEmotes) {
-
-                    buildMessageAnnotated(
-
-                        m.sender,
-
-                        nickColor(m.color),
-
-                        m.text,
-
-                        TeaColors.TextPrimary,
-
-                        lookup,
-
-                        badgeUrls = m.badges.mapNotNull { badgeMap[it] },
-
-                        fontSizeSp = fontSizeSp,
-
-                        messageEmotes = m.twitchEmotes
-
-                    )
-
-                }
-
                 Text(
 
                     text = ann,
 
-                    inlineContent = inline
+                    inlineContent = inline,
+
+                    onTextLayout = { textLayoutResult = it }
 
                 )
 

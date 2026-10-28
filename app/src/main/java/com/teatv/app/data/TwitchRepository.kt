@@ -10,9 +10,10 @@ import com.teatv.app.auth.TwitchAuth
 import com.teatv.app.player.TwitchHls
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 class TwitchRepository(
     private val api: TwitchApi,
@@ -97,35 +98,58 @@ class TwitchRepository(
     suspend fun getClipStreamUrl(clipSlug: String): String? =
         gql.getClipPlaybackUrl(clipSlug)
 
-    /** Мои активные подписки: параллельный обход фолоу. */
+    /** Мои активные подписки: сначала GQL (надёжно и мгновенно со всеми подписками), при ошибке — Helix. */
     suspend fun getMySubscriptions(): List<MySubscription> {
-        val me = getProfile()
+        val gqlSubs = try {
+            gql.getSubscribedChannels()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        if (gqlSubs.isNotEmpty()) {
+            return gqlSubs
+        }
+
+        // Фоллбэк: Helix обход подписок + владельцев смайлов
+        val me = try { getProfile() } catch (_: Exception) { return emptyList() }
         val token = helix()
         val clientId = TwitchAuth.OWN_CLIENT_ID
 
         val follows = try {
             api.getFollowedChannels(me.id, token)
         } catch (_: Exception) {
-            return emptyList()
+            emptyList()
         }
 
-        if (follows.isEmpty()) return emptyList()
+        val emoteOwners = try {
+            api.getUserEmotes(me.id, token, subsOnly = true).mapNotNull { it.ownerId }.filter { it.isNotBlank() && it != "0" }
+        } catch (_: Exception) {
+            emptyList()
+        }
 
-        // Параллельная проверка всех каналов
-        return coroutineScope {
-            follows.map { f ->
-                async {
-                    try {
-                        api.getSubscriptionTo(f.broadcasterId, me.id, token, clientId)
-                    } catch (_: Exception) {
-                        0 to null
+        val candidateIds = (follows.map { it.broadcasterId } + emoteOwners).distinct()
+        if (candidateIds.isEmpty()) return emptyList()
+
+        val results = mutableListOf<MySubscription>()
+        for (chunk in candidateIds.chunked(15)) {
+            val batch = coroutineScope {
+                chunk.map { bId ->
+                    async {
+                        try {
+                            api.getSubscriptionTo(bId, me.id, token, clientId)
+                        } catch (_: Exception) {
+                            0 to null
+                        }
                     }
-                }
-            }.awaitAll().filter { (code, sub) ->
-                if (code == 401) return@coroutineScope emptyList()
-                code == 200 && sub != null
-            }.map { it.second!! }
+                }.awaitAll()
+            }
+            batch.forEach { (code, sub) ->
+                if (code == 200 && sub != null) results += sub
+            }
+            if (candidateIds.size > 15) {
+                delay(150)
+            }
         }
+        return results
     }
 
     /** Подписан ли я на канал (звёздочка). */

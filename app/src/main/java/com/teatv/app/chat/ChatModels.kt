@@ -15,5 +15,6 @@ data class ChatMessage(
     val senderId: String? = null,
     val senderLogin: String? = null,
     val twitchEmotes: Map<String, String> = emptyMap(),
-    val offsetSeconds: Int = 0
+    val offsetSeconds: Int = 0,
+    val timestamp: Long = System.currentTimeMillis()
 )

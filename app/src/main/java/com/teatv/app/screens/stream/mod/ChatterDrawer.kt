@@ -12,10 +12,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.teatv.app.R
+import com.teatv.app.chat.ChatMessage
 import com.teatv.app.mod.ChannelModesState
 import com.teatv.app.mod.ChatterInfo
 import com.teatv.app.ui.theme.TeaColors
@@ -60,6 +64,7 @@ fun ChatterDrawer(
     onSelectSlowMode: (Int) -> Unit,
     onOpenBlockedWords: () -> Unit,
     onOpenPermittedWords: () -> Unit,
+    chatterMessages: List<ChatMessage> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -157,25 +162,86 @@ fun ChatterDrawer(
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
 
-                InfoRow("Регистрация:", chatter.createdAt ?: "—")
-                InfoRow("Фолловит канал:", chatter.followedAt ?: "—")
-                if (chatter.sevenTvBadges.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier.padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("7TV:", color = TeaColors.TextSecondary, fontSize = 12.sp)
-                        Spacer(Modifier.width(8.dp))
-                        chatter.sevenTvBadges.take(5).forEach { bUrl ->
-                            AsyncImage(
-                                model = bUrl,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .padding(end = 4.dp)
-                            )
+                // Модераторская статистика активности
+                InfoRow("Сообщений в чате:", "${chatterMessages.size}")
+                val firstMsg = chatterMessages.firstOrNull()
+                val lastMsg = chatterMessages.lastOrNull()
+                if (firstMsg != null && lastMsg != null) {
+                    val sdf = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
+                    InfoRow("Первое сообщение:", sdf.format(java.util.Date(firstMsg.timestamp)))
+                    InfoRow("Последнее сообщение:", sdf.format(java.util.Date(lastMsg.timestamp)))
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // Раскрывающийся / листаемый список всех сообщений чаттера
+                var showMessagesList by remember { mutableStateOf(true) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { showMessagesList = !showMessagesList }
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Все сообщения (${chatterMessages.size})",
+                        color = TeaColors.TextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (showMessagesList) "▲ Скрыть" else "▼ Открыть",
+                        color = TeaColors.Accent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                if (showMessagesList) {
+                    if (chatterMessages.isEmpty()) {
+                        Text(
+                            text = "Сообщений на текущем стриме нет",
+                            color = TeaColors.TextSecondary,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    } else {
+                        val sdf = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(TeaColors.Surface)
+                                .padding(8.dp)
+                        ) {
+                            LazyColumn {
+                                items(chatterMessages) { msg ->
+                                    val timeStr = sdf.format(java.util.Date(msg.timestamp))
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "[$timeStr] ",
+                                            color = TeaColors.TextSecondary,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = msg.text,
+                                            color = TeaColors.TextPrimary,
+                                            fontSize = 11.sp,
+                                            lineHeight = 15.sp
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

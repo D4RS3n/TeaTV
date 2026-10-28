@@ -180,70 +180,148 @@ class TwitchApi(
             }
         }
 
-    /** Подписки пользователя (GET /helix/channels/followed). */
+    /** Подписки пользователя (GET /helix/channels/followed) со всеми страницами. */
     suspend fun getFollowedChannels(userId: String, token: String): List<FollowedChannel> =
         withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url("https://api.twitch.tv/helix/channels/followed?user_id=$userId&first=100")
-                .withAuth(token)
-                .build()
-            client.newCall(request).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) error("Followed failed: ${resp.code} $text")
-                val arr = JSONObject(text).getJSONArray("data")
-                List(arr.length()) { i ->
-                    val o = arr.getJSONObject(i)
-                    FollowedChannel(
-                        broadcasterId = o.getString("broadcaster_id"),
-                        broadcasterLogin = o.getString("broadcaster_login"),
-                        broadcasterName = o.getString("broadcaster_name"),
-                        followedAt = o.optString("followed_at", "")
-                    )
+            val out = mutableListOf<FollowedChannel>()
+            var cursor: String? = null
+            var pageCount = 0
+
+            do {
+                val url = buildString {
+                    append("https://api.twitch.tv/helix/channels/followed?user_id=").append(userId).append("&first=100")
+                    if (!cursor.isNullOrBlank()) {
+                        append("&after=").append(cursor)
+                    }
                 }
-            }
+                val request = Request.Builder()
+                    .url(url)
+                    .withAuth(token)
+                    .build()
+
+                var nextCursor: String? = null
+                val fetched = try {
+                    client.newCall(request).execute().use { resp ->
+                        val text = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            Log.w("TeaTV-Api", "Followed channels failed ${resp.code}: $text")
+                            return@use emptyList()
+                        }
+                        val root = JSONObject(text)
+                        val arr = root.optJSONArray("data") ?: return@use emptyList()
+                        nextCursor = root.optJSONObject("pagination")?.optString("cursor")?.takeIf { it.isNotBlank() }
+                        List(arr.length()) { i ->
+                            val o = arr.getJSONObject(i)
+                            FollowedChannel(
+                                broadcasterId = o.getString("broadcaster_id"),
+                                broadcasterLogin = o.getString("broadcaster_login"),
+                                broadcasterName = o.getString("broadcaster_name"),
+                                followedAt = o.optString("followed_at", "")
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("TeaTV-Api", "Followed channels exception", e)
+                    emptyList()
+                }
+
+                if (fetched.isEmpty()) break
+                out += fetched
+                cursor = nextCursor
+                pageCount++
+            } while (!cursor.isNullOrBlank() && pageCount < 20)
+
+            out
         }
 
-    /** Живые стримы из подписок (GET /helix/streams/followed). */
+    /** Живые стримы из подписок (GET /helix/streams/followed) со всеми страницами. */
     suspend fun getFollowedStreams(userId: String, token: String): List<LiveStream> =
         withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url("https://api.twitch.tv/helix/streams/followed?user_id=$userId&first=100")
-                .withAuth(token)
-                .build()
-            client.newCall(request).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) error("Streams failed: ${resp.code} $text")
-                val arr = JSONObject(text).getJSONArray("data")
-                List(arr.length()) { i ->
-                    val o = arr.getJSONObject(i)
-                    LiveStream(
-                        userId = o.getString("user_id"),
-                        startedAt = o.optString("started_at", ""),
-                        userName = o.getString("user_name"),
-                        gameId = o.optString("game_id", ""),
-                        gameName = o.optString("game_name", ""),
-                        title = o.optString("title", ""),
-                        viewerCount = o.optInt("viewer_count", 0),
-                        thumbnailUrl = o.optString("thumbnail_url", "")
-                    )
+            val out = mutableListOf<LiveStream>()
+            var cursor: String? = null
+            var pageCount = 0
+
+            do {
+                val url = buildString {
+                    append("https://api.twitch.tv/helix/streams/followed?user_id=").append(userId).append("&first=100")
+                    if (!cursor.isNullOrBlank()) {
+                        append("&after=").append(cursor)
+                    }
                 }
-            }
+                val request = Request.Builder()
+                    .url(url)
+                    .withAuth(token)
+                    .build()
+
+                var nextCursor: String? = null
+                val fetched = try {
+                    client.newCall(request).execute().use { resp ->
+                        val text = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            Log.w("TeaTV-Api", "Followed streams failed ${resp.code}: $text")
+                            return@use emptyList()
+                        }
+                        val root = JSONObject(text)
+                        val arr = root.optJSONArray("data") ?: return@use emptyList()
+                        nextCursor = root.optJSONObject("pagination")?.optString("cursor")?.takeIf { it.isNotBlank() }
+                        List(arr.length()) { i ->
+                            val o = arr.getJSONObject(i)
+                            LiveStream(
+                                userId = o.getString("user_id"),
+                                startedAt = o.optString("started_at", ""),
+                                userName = o.getString("user_name"),
+                                gameId = o.optString("game_id", ""),
+                                gameName = o.optString("game_name", ""),
+                                title = o.optString("title", ""),
+                                viewerCount = o.optInt("viewer_count", 0),
+                                thumbnailUrl = o.optString("thumbnail_url", "")
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("TeaTV-Api", "Followed streams exception", e)
+                    emptyList()
+                }
+
+                if (fetched.isEmpty()) break
+                out += fetched
+                cursor = nextCursor
+                pageCount++
+            } while (!cursor.isNullOrBlank() && pageCount < 10)
+
+            out
         }
 
-    /** Пользователи по id (GET /helix/users). */
+    /** Пользователи по id (GET /helix/users). Чанкует по 100 для обхода лимита Twitch. */
     suspend fun getUsersByIds(ids: List<String>, token: String): List<TwitchUser> =
         withContext(Dispatchers.IO) {
-            if (ids.isEmpty()) return@withContext emptyList()
-            val request = Request.Builder()
-                .url("https://api.twitch.tv/helix/users?" + ids.joinToString("&") { "id=$it" })
-                .withAuth(token)
-                .build()
-            client.newCall(request).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) error("Users failed: ${resp.code} $text")
-                val arr = JSONObject(text).getJSONArray("data")
-                List(arr.length()) { i -> parseUser(arr.getJSONObject(i)) }
+            val distinctIds = ids.distinct()
+            if (distinctIds.isEmpty()) return@withContext emptyList()
+            val out = mutableListOf<TwitchUser>()
+            distinctIds.chunked(100).forEach { chunk ->
+                val request = Request.Builder()
+                    .url("https://api.twitch.tv/helix/users?" + chunk.joinToString("&") { "id=$it" })
+                    .withAuth(token)
+                    .build()
+                try {
+                    client.newCall(request).execute().use { resp ->
+                        val text = resp.body?.string().orEmpty()
+                        if (resp.isSuccessful) {
+                            val arr = JSONObject(text).optJSONArray("data")
+                            if (arr != null) {
+                                for (i in 0 until arr.length()) {
+                                    out += parseUser(arr.getJSONObject(i))
+                                }
+                            }
+                        } else {
+                            Log.w("TeaTV-Api", "Users chunk failed: ${resp.code} $text")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("TeaTV-Api", "Users chunk exception", e)
+                }
             }
+            out
         }
 
     /** Инфо канала (GET /helix/channels). */
@@ -383,7 +461,8 @@ class TwitchApi(
                     replyToBody = tags["reply-parent-msg-body"]?.takeIf { it.isNotBlank() },
                     senderId = tags["user-id"]?.takeIf { it.isNotBlank() },
                     senderLogin = tags["login"]?.takeIf { it.isNotBlank() },
-                    twitchEmotes = msgEmotes
+                    twitchEmotes = msgEmotes,
+                    timestamp = tags["tmi-sent-ts"]?.toLongOrNull() ?: System.currentTimeMillis()
                 )
             } else {
                 null
@@ -441,65 +520,89 @@ class TwitchApi(
     ): List<Emote> =
         withContext(Dispatchers.IO) {
             try {
-                val request = Request.Builder()
-                    .url("https://api.twitch.tv/helix/$path")
-                    .withAuth(token)
-                    .build()
+                val out = mutableListOf<Emote>()
+                val seenCodes = mutableSetOf<String>()
+                var cursor: String? = null
+                var pageCount = 0
 
-                client.newCall(request).execute().use { resp ->
-                    if (!resp.isSuccessful) return@withContext emptyList()
-
-                    val arr = JSONObject(resp.body?.string().orEmpty()).optJSONArray("data")
-                        ?: return@withContext emptyList()
-
-                    val out = mutableListOf<Emote>()
-
-                    for (i in 0 until arr.length()) {
-                        val o = arr.getJSONObject(i)
-
-                        val emoteType = o.optString("emote_type").ifBlank {
-                            o.optJSONObject("emote_set")?.optString("type").orEmpty()
+                do {
+                    val separator = if (path.contains("?")) "&" else "?"
+                    val url = buildString {
+                        append("https://api.twitch.tv/helix/").append(path)
+                        if (!path.contains("first=")) {
+                            append(separator).append("first=100")
                         }
-                        val ownerId = o.optString("owner_id").ifBlank {
-                            if (path.contains("broadcaster_id=")) path.substringAfter("broadcaster_id=").substringBefore("&") else null
-                        }
-
-                        if (subsOnly) {
-                            if (ownerId.isNullOrBlank() || ownerId == "0") {
-                                continue
-                            }
-                            if (emoteType.isNotBlank() && emoteType in setOf("globals", "smilies")) {
-                                continue
-                            }
-                            if (emoteType.isNotBlank() && emoteType !in setOf("subscriptions", "follower", "bitstier", "rewards", "hypetrain", "prime", "twofactor", "limitedtime")) {
-                                continue
-                            }
-                        }
-
-                        val id = o.optString("id")
-                        val img = o.optJSONObject("images")
-                        val code = o.optString("name")
-                        val url = if (id.isNotBlank()) {
-                            "https://static-cdn.jtvnw.net/emoticons/v2/$id/default/dark/2.0"
-                        } else {
-                            img?.optString("url_2x")?.takeIf { it.isNotBlank() } ?: img?.optString("url_1x").orEmpty()
-                        }
-
-                        if (code.isNotBlank() && url.isNotBlank()) {
-                            val emote = Emote(
-                                code = code,
-                                url = url,
-                                kind = EmoteKind.TWITCH,
-                                ownerId = ownerId,
-                                emoteType = emoteType.takeIf { it.isNotBlank() }
-                            )
-                            out += emote
-                            com.teatv.app.chat.emotes.TwitchEmoteCache.put(code, url)
+                        if (!cursor.isNullOrBlank()) {
+                            append("&after=").append(cursor)
                         }
                     }
 
-                    out
-                }
+                    val request = Request.Builder()
+                        .url(url)
+                        .withAuth(token)
+                        .build()
+
+                    var nextCursor: String? = null
+                    val fetched = client.newCall(request).execute().use { resp ->
+                        if (!resp.isSuccessful) return@use emptyList<Emote>()
+                        val text = resp.body?.string().orEmpty()
+                        if (text.isBlank()) return@use emptyList<Emote>()
+                        val root = JSONObject(text)
+                        val arr = root.optJSONArray("data") ?: return@use emptyList<Emote>()
+                        nextCursor = root.optJSONObject("pagination")?.optString("cursor")?.takeIf { it.isNotBlank() }
+
+                        val pageEmotes = mutableListOf<Emote>()
+                        for (i in 0 until arr.length()) {
+                            val o = arr.getJSONObject(i)
+                            val emoteType = o.optString("emote_type").ifBlank {
+                                o.optJSONObject("emote_set")?.optString("type").orEmpty()
+                            }
+                            val ownerId = o.optString("owner_id").ifBlank {
+                                if (path.contains("broadcaster_id=")) path.substringAfter("broadcaster_id=").substringBefore("&") else null
+                            }
+
+                            if (subsOnly) {
+                                if (ownerId.isNullOrBlank() || ownerId == "0") {
+                                    continue
+                                }
+                                if (emoteType.isNotBlank() && emoteType in setOf("globals", "smilies")) {
+                                    continue
+                                }
+                            }
+
+                            val id = o.optString("id")
+                            val img = o.optJSONObject("images")
+                            val code = o.optString("name")
+                            val url2x = if (id.isNotBlank()) {
+                                "https://static-cdn.jtvnw.net/emoticons/v2/$id/default/dark/2.0"
+                            } else {
+                                img?.optString("url_2x")?.takeIf { it.isNotBlank() } ?: img?.optString("url_1x").orEmpty()
+                            }
+
+                            if (code.isNotBlank() && url2x.isNotBlank()) {
+                                if (seenCodes.add(code)) {
+                                    val emote = Emote(
+                                        code = code,
+                                        url = url2x,
+                                        kind = EmoteKind.TWITCH,
+                                        ownerId = ownerId,
+                                        emoteType = emoteType.takeIf { it.isNotBlank() }
+                                    )
+                                    pageEmotes += emote
+                                    com.teatv.app.chat.emotes.TwitchEmoteCache.put(code, url2x)
+                                }
+                            }
+                        }
+                        pageEmotes
+                    }
+
+                    if (fetched.isEmpty()) break
+                    out += fetched
+                    cursor = nextCursor
+                    pageCount++
+                } while (!cursor.isNullOrBlank() && pageCount < 25)
+
+                out
             } catch (_: Exception) {
                 emptyList()
             }
@@ -542,57 +645,78 @@ class TwitchApi(
         }
     }
 
-    /** Аватары пользователей по id (для обогащения стримов игры). */
+    /** Аватары пользователей по id (для обогащения стримов игры) с чанкованием по 100. */
     suspend fun getUsersAvatars(ids: List<String>, token: String): Map<String, String> =
         withContext(Dispatchers.IO) {
-            if (ids.isEmpty()) return@withContext emptyMap()
-            // Helix позволяет до 100 id в одном запросе
-            val request = Request.Builder()
-                .url("https://api.twitch.tv/helix/users?" + ids.joinToString("&") { "id=$it" })
-                .withAuth(token)
-                .build()
-            client.newCall(request).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) return@withContext emptyMap()
-                val arr = JSONObject(text).optJSONArray("data") ?: return@withContext emptyMap()
-                val out = mutableMapOf<String, String>()
-                for (i in 0 until arr.length()) {
-                    val u = arr.getJSONObject(i)
-                    val id = u.optString("id", "")
-                    val av = u.optString("profile_image_url", "")
-                    if (id.isNotBlank()) out[id] = av
+            val distinctIds = ids.distinct()
+            if (distinctIds.isEmpty()) return@withContext emptyMap()
+            val out = mutableMapOf<String, String>()
+            distinctIds.chunked(100).forEach { chunk ->
+                val request = Request.Builder()
+                    .url("https://api.twitch.tv/helix/users?" + chunk.joinToString("&") { "id=$it" })
+                    .withAuth(token)
+                    .build()
+                try {
+                    client.newCall(request).execute().use { resp ->
+                        val text = resp.body?.string().orEmpty()
+                        if (resp.isSuccessful) {
+                            val arr = JSONObject(text).optJSONArray("data")
+                            if (arr != null) {
+                                for (i in 0 until arr.length()) {
+                                    val u = arr.getJSONObject(i)
+                                    val id = u.optString("id", "")
+                                    val av = u.optString("profile_image_url", "")
+                                    if (id.isNotBlank()) out[id] = av
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("TeaTV-Api", "Users avatars chunk error", e)
                 }
-                out
             }
+            out
         }
 
-    /** Стримы по id пользователей (GET /helix/streams?user_id=...). */
+    /** Стримы по id пользователей (GET /helix/streams?user_id=...) с чанкованием по 100. */
     suspend fun getStreamsByUsers(
         userIds: List<String>,
         token: String
     ): List<LiveStream> = withContext(Dispatchers.IO) {
-        if (userIds.isEmpty()) return@withContext emptyList()
-        val url = "https://api.twitch.tv/helix/streams?" +
-                userIds.take(100).joinToString("&") { "user_id=$it" }
-        val request = Request.Builder().url(url).withAuth(token).build()
-        client.newCall(request).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) return@withContext emptyList()
-            val arr = JSONObject(text).optJSONArray("data") ?: return@withContext emptyList()
-            List(arr.length()) { i ->
-                val o = arr.getJSONObject(i)
-                LiveStream(
-                    userId = o.getString("user_id"),
-                    userName = o.getString("user_name"),
-                    gameId = o.optString("game_id", ""),
-                    gameName = o.optString("game_name", ""),
-                    title = o.optString("title", ""),
-                    viewerCount = o.optInt("viewer_count", 0),
-                    thumbnailUrl = o.optString("thumbnail_url", ""),
-                    startedAt = o.optString("started_at", "")
-                )
+        val distinctIds = userIds.distinct()
+        if (distinctIds.isEmpty()) return@withContext emptyList()
+        val out = mutableListOf<LiveStream>()
+        distinctIds.chunked(100).forEach { chunk ->
+            val url = "https://api.twitch.tv/helix/streams?" +
+                    chunk.joinToString("&") { "user_id=$it" }
+            val request = Request.Builder().url(url).withAuth(token).build()
+            try {
+                client.newCall(request).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (resp.isSuccessful) {
+                        val arr = JSONObject(text).optJSONArray("data")
+                        if (arr != null) {
+                            for (i in 0 until arr.length()) {
+                                val o = arr.getJSONObject(i)
+                                out += LiveStream(
+                                    userId = o.getString("user_id"),
+                                    userName = o.getString("user_name"),
+                                    gameId = o.optString("game_id", ""),
+                                    gameName = o.optString("game_name", ""),
+                                    title = o.optString("title", ""),
+                                    viewerCount = o.optInt("viewer_count", 0),
+                                    thumbnailUrl = o.optString("thumbnail_url", ""),
+                                    startedAt = o.optString("started_at", "")
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("TeaTV-Api", "Streams by users chunk error", e)
             }
         }
+        out
     }
 
     /** Поиск каналов (GET /helix/search/channels). */

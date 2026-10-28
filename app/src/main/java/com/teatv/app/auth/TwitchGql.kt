@@ -5,6 +5,7 @@ import com.teatv.app.chat.ChatMessage
 import com.teatv.app.data.CategoryDetails
 import com.teatv.app.data.ChannelClip
 import com.teatv.app.data.FollowedCategory
+import com.teatv.app.data.MySubscription
 import com.teatv.app.data.SocialLink
 import com.teatv.app.data.TwitchUser
 import org.json.JSONObject
@@ -100,10 +101,10 @@ class TwitchGql(
 
 
 
-    /** Только настоящие зафоловленные категории пользователя. */
+    /** Только настоящие зафоловленные категории пользователя (до 100). */
     suspend fun followedGames(userId: String): List<FollowedCategory> {
         val r = query(
-            """{"query":"query { user(id: \"$userId\") { followedGames(first: 50) { nodes { id name boxArtURL(width: 188, height: 250) } } } }"}"""
+            """{"query":"query { user(id: \"$userId\") { followedGames(first: 100) { nodes { id name boxArtURL(width: 188, height: 250) } } } }"}"""
         )
         if (r.contains("\"errors\"")) {
             Log.e("TeaTV-GQL", "followedGames errors: $r")
@@ -120,6 +121,68 @@ class TwitchGql(
                 boxArtUrl = n.optString("boxArtURL", "")
             )
         }
+    }
+
+    /** Все платные и подарочные подписки пользователя через Twitch GQL со всеми страницами. */
+    suspend fun getSubscribedChannels(): List<MySubscription> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<MySubscription>()
+        var cursor: String? = null
+        var page = 0
+        try {
+            do {
+                val afterArg = if (cursor != null) ", after: \"$cursor\"" else ""
+                val q = """{"query":"query { currentUser { subscribedChannels(first: 100$afterArg) { totalCount pageInfo { hasNextPage } edges { cursor node { id login displayName profileImageURL(width: 150) self { subscriptionBenefit { id tier endsAt purchasedWithPrime renewsAt gift { gifter { displayName } } } } } } } } }"}"""
+                val resp = query(q)
+                if (resp.contains("\"errors\"") && !resp.contains("\"subscribedChannels\"")) {
+                    Log.w("TeaTV-GQL", "getSubscribedChannels errors: $resp")
+                    break
+                }
+                val data = JSONObject(resp).optJSONObject("data")
+                val curUser = data?.optJSONObject("currentUser") ?: break
+                val subChannels = curUser.optJSONObject("subscribedChannels") ?: break
+                val edges = subChannels.optJSONArray("edges") ?: break
+
+                for (i in 0 until edges.length()) {
+                    val edge = edges.optJSONObject(i) ?: continue
+                    val node = edge.optJSONObject("node") ?: continue
+                    val broadcasterId = node.optString("id")
+                    val broadcasterLogin = node.optString("login")
+                    val broadcasterName = node.optString("displayName", broadcasterLogin)
+                    val benefit = node.optJSONObject("self")?.optJSONObject("subscriptionBenefit")
+                    val tier = benefit?.optString("tier", "TIER_1") ?: "TIER_1"
+                    val isPrime = benefit?.optBoolean("purchasedWithPrime", false) ?: false
+                    val gifter = benefit?.optJSONObject("gift")?.optJSONObject("gifter")?.optString("displayName")
+                    val planName = when {
+                        !gifter.isNullOrBlank() -> "Подарочная от $gifter"
+                        isPrime -> "Prime Gaming"
+                        tier == "TIER_3" || tier == "3000" -> "Tier 3"
+                        tier == "TIER_2" || tier == "2000" -> "Tier 2"
+                        else -> "Tier 1"
+                    }
+                    val createdAt = benefit?.optString("renewsAt")?.takeIf { it.isNotBlank() }
+                        ?: benefit?.optString("endsAt")?.takeIf { it.isNotBlank() }
+
+                    if (broadcasterId.isNotBlank()) {
+                        out += MySubscription(
+                            broadcasterId = broadcasterId,
+                            broadcasterLogin = broadcasterLogin,
+                            broadcasterName = broadcasterName,
+                            tier = tier,
+                            planName = planName,
+                            createdAt = createdAt
+                        )
+                    }
+                    cursor = edge.optString("cursor").takeIf { it.isNotBlank() }
+                }
+
+                val hasNext = subChannels.optJSONObject("pageInfo")?.optBoolean("hasNextPage", false) ?: false
+                if (!hasNext) break
+                page++
+            } while (cursor != null && page < 10)
+        } catch (e: Exception) {
+            Log.w("TeaTV-GQL", "getSubscribedChannels exception", e)
+        }
+        out
     }
 
     /** Детали игры: имя, бокс-арт, зрители, фолловеры. Один точный запрос. */

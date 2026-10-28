@@ -107,9 +107,11 @@ fun buildMessageAnnotated(
         }
         builder.append(" ")
     }
+    builder.pushStringAnnotation(tag = "NICKNAME", annotation = sender)
     builder.withStyle(
         SpanStyle(color = senderColor, fontWeight = FontWeight.ExtraBold, fontSize = senderSizeSp.sp)
     ) { append(sender) }
+    builder.pop()
     builder.withStyle(SpanStyle(color = textColor, fontSize = fontSizeSp.sp)) {
         appendTextWithEmotes(": " + text, lookup, inline, emoteSizeSp, messageEmotes)
     }

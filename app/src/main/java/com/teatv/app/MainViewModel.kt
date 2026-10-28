@@ -39,6 +39,7 @@ import com.teatv.app.player.TwitchHls
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.teatv.app.data.CategoryDetails
 import com.teatv.app.data.SearchBundle
 import com.teatv.app.chat.points.ChannelPointsState
@@ -157,6 +158,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val seenIds = hashSetOf<String>()
     private val chatWindowLimit = 200
     private var chatClient: ChatClient? = null
+    private val streamChatCache = mutableMapOf<String, MutableList<ChatMessage>>()
+
+    var selectedViewerInfo by mutableStateOf<ChatterInfo?>(null)
+    var isLoadingViewerInfo by mutableStateOf(false)
+
+    fun openViewerProfile(userLogin: String, userId: String? = null) {
+        val ch = currentStream ?: return
+        viewModelScope.launch {
+            isLoadingViewerInfo = true
+            selectedViewerInfo = ChatterInfo(
+                userId = userId.orEmpty(),
+                userLogin = userLogin,
+                displayName = userLogin
+            )
+            val info = modRepository.fetchChatterInfo(
+                channelId = ch.id,
+                channelLogin = ch.login,
+                userLogin = userLogin,
+                userId = userId,
+                myUserId = user?.id,
+                myUserLogin = user?.login
+            )
+            selectedViewerInfo = info
+            isLoadingViewerInfo = false
+        }
+    }
+
+    fun closeViewerProfile() {
+        selectedViewerInfo = null
+        isLoadingViewerInfo = false
+    }
 
     var emotes by mutableStateOf(EmoteBundles())
         private set
@@ -363,6 +395,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
             if (isCurrentStreamModerator) {
                 loadModData(item.id, item.login)
+            } else {
+                try {
+                    channelModes = modRepository.fetchChannelModes(item.id, user?.id)
+                } catch (_: Exception) {}
             }
         }
         targetNotified = notifyStore.isNotified(item.id)
@@ -1485,6 +1521,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (seenIds.contains(m.id)) return@launch
             chatMessages.add(m)
             seenIds.add(m.id)
+            currentStream?.id?.let { streamId ->
+                val cache = streamChatCache.getOrPut(streamId) { mutableListOf() }
+                cache.add(m)
+                while (cache.size > chatWindowLimit) {
+                    cache.removeAt(0)
+                }
+            }
             while (chatMessages.size > chatWindowLimit) {
                 val removed = chatMessages.removeAt(0)
                 seenIds.remove(removed.id)
@@ -1532,25 +1575,61 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun startChat(t: StreamerItem) {
         stopChat()
-        resetChat()
+        chatMessages.clear()
+        seenIds.clear()
+
+        // 1. Мгновенно восстанавливаем кешированные сообщения стрима, если пользователь уже заходил
+        val cached = streamChatCache[t.id]
+        if (!cached.isNullOrEmpty()) {
+            for (m in cached) {
+                if (seenIds.add(m.id)) {
+                    chatMessages.add(m)
+                }
+            }
+        }
+
         viewModelScope.launch {
-            val token = tokenStore.accessToken ?: return@launch
             val me = try {
                 repository.getProfile()
             } catch (_: Exception) {
                 return@launch
             }
-            val hist = try {
-                api.getRecentChat(t.login)
-            } catch (_: Exception) {
-                emptyList()
-            }
-            seedHistory(hist)
+
+            // 2. Сразу же подключаем EventSub WebSocket в фоне, чтобы не терять новые сообщения во время запроса истории
             val helixToken = tokenStore.helixToken ?: return@launch
             chatClient = ChatClient(helixToken, TwitchAuth.OWN_CLIENT_ID, me.id) { m ->
                 insertMessage(m)
             }
             chatClient?.connect(t.id)
+
+            // 3. Загружаем историю чата
+            val hist = try {
+                api.getRecentChat(t.login)
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+            // 4. Мерджим историю: добавляем в начало только сообщения, которых ещё нет в чате
+            if (hist.isNotEmpty()) {
+                withContext(Dispatchers.Main.immediate) {
+                    val older = hist.filter { it.id !in seenIds }
+                    if (older.isNotEmpty()) {
+                        chatMessages.addAll(0, older)
+                        older.forEach { seenIds.add(it.id) }
+
+                        val cache = streamChatCache.getOrPut(t.id) { mutableListOf() }
+                        cache.addAll(0, older)
+                        while (cache.size > chatWindowLimit) {
+                            cache.removeAt(0)
+                        }
+
+                        while (chatMessages.size > chatWindowLimit) {
+                            val removed = chatMessages.removeAt(0)
+                            seenIds.remove(removed.id)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1576,7 +1655,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         Log.e("MainViewModel", "Failed to send chat message chunk $i", e)
                     }
                     if (i < chunks.size - 1) {
-                        delay(800) // Безопасный интервал отправки следующего закешированного фрагмента
+                        val slowSeconds = channelModes.slowModeSeconds
+                        if (slowSeconds > 0) {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(
+                                    getApplication(),
+                                    "Медленный режим ($slowSeconds сек): отправка части ${i + 2}/${chunks.size}...",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            delay((slowSeconds * 1000L) + 500L)
+                        } else {
+                            delay(800)
+                        }
                     }
                 }
             } else {

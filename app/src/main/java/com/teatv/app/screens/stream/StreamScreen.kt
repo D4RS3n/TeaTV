@@ -169,10 +169,24 @@ fun StreamScreen(
     onSendAnnounce: (String) -> Unit = {},
     onPinMessage: (ChatMessage) -> Unit = {},
     bufferSeconds: Int = 15,
-    onMinimize: () -> Unit = {}
+    onMinimize: () -> Unit = {},
+    viewerProfile: ChatterInfo? = null,
+    isLoadingViewerProfile: Boolean = false,
+    onUserClick: ((ChatMessage) -> Unit)? = null,
+    onDismissViewerProfile: () -> Unit = {}
 ) {
     var showStats by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(false) }
+
+    val chatterMessages = remember(selectedChatter?.userLogin, chatMessages.size) {
+        val login = selectedChatter?.userLogin?.lowercase()
+        val id = selectedChatter?.userId
+        if (login.isNullOrBlank() && id.isNullOrBlank()) emptyList()
+        else chatMessages.filter { m ->
+            (id != null && m.senderId == id) ||
+            (login != null && (m.senderLogin?.lowercase() == login || m.sender.lowercase() == login))
+        }
+    }
 
 
     var showSettings by remember { mutableStateOf(false) }
@@ -539,6 +553,7 @@ fun StreamScreen(
                 onModSliderAction = onModSliderAction,
                 onHidePinnedMessage = onHidePinnedMessage,
                 onUnpinMessage = onUnpinMessage,
+                onUserClick = onUserClick,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -604,6 +619,7 @@ fun StreamScreen(
                 chatter = selectedChatter,
                 modes = channelModes,
                 onClose = { showLeftDrawer = false },
+                chatterMessages = chatterMessages,
                 onUnban = onUnbanChatter,
                 onToggleShield = onToggleShield,
                 onToggleSubOnly = onToggleSubOnly,
@@ -680,6 +696,14 @@ fun StreamScreen(
             target = target,
             viewers = viewers,
             onDismiss = { showStats = false }
+        )
+    }
+
+    if (viewerProfile != null || isLoadingViewerProfile) {
+        ViewerProfileDialog(
+            chatter = viewerProfile,
+            isLoading = isLoadingViewerProfile,
+            onDismiss = onDismissViewerProfile
         )
     }
 }

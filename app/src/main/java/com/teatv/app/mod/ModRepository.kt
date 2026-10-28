@@ -199,14 +199,14 @@ class ModRepository(
     }
 
     /** Загрузка полной информации о чаттере (Twitch + 7TV). */
-    suspend fun fetchChatterInfo(
-        userId: String?,
-        userLogin: String,
-        channelId: String,
-        channelLogin: String? = null,
-        myUserId: String? = null,
-        myUserLogin: String? = null,
-        isChannelFollowed: Boolean? = null
+    suspend fun fetchChatterInfo(
+        userId: String?,
+        userLogin: String,
+        channelId: String,
+        channelLogin: String? = null,
+        myUserId: String? = null,
+        myUserLogin: String? = null,
+        isChannelFollowed: Boolean? = null
     ): ChatterInfo = withContext(Dispatchers.IO) {
         var resolvedId = userId
         var avatarUrl: String? = null
@@ -236,67 +236,67 @@ class ModRepository(
             }
         }
 
-        // 2. Дата фоллоу на текущий канал стримера
-        val isStreamer = (resolvedId != null && resolvedId == channelId) ||
-                (channelLogin != null && actualLogin.equals(channelLogin, ignoreCase = true))
-        val isSelf = (myUserId != null && resolvedId == myUserId) ||
-                (myUserLogin != null && actualLogin.equals(myUserLogin, ignoreCase = true))
-
-        if (isStreamer) {
-            followedAt = "Автор канала"
-        } else if (!resolvedId.isNullOrBlank()) {
-            if (isSelf) {
-                // Попытка 1: Helix channels/followed для себя
-                val fUrl = "https://api.twitch.tv/helix/channels/followed?user_id=$resolvedId&broadcaster_id=$channelId"
-                val (fOk, fBody) = sendHelixRequest(fUrl, "GET")
-                if (fOk && !fBody.isNullOrBlank()) {
-                    val arr = JSONObject(fBody).optJSONArray("data")
-                    val obj = arr?.optJSONObject(0)
-                    val rawDate = obj?.optString("followed_at")
-                    if (!rawDate.isNullOrBlank()) {
-                        followedAt = formatIsoDate(rawDate)
-                    }
-                }
-
-                // Попытка 2: GQL relationship через Web API
-                if (followedAt == null) {
-                    try {
-                        val q = """{"query":"query { user(id: \"$channelId\") { relationship { followedAt } } }"}"""
-                        val resp = gql.queryWeb(q)
-                        val rawDate = JSONObject(resp).optJSONObject("data")
-                            ?.optJSONObject("user")
-                            ?.optJSONObject("relationship")
-                            ?.optString("followedAt")
-                        if (!rawDate.isNullOrBlank()) {
-                            followedAt = formatIsoDate(rawDate)
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                // Попытка 3: если известно, что канал зафоловлен, но дата не получена
-                if (followedAt == null) {
-                    if (isChannelFollowed == true) {
-                        followedAt = "Фолловит канал"
-                    } else if (isChannelFollowed == false) {
-                        followedAt = "Не фолловит"
-                    }
-                }
-            } else {
-                // Другой чаттер: проверка через Helix channels/followers (требует прав модератора)
-                if (!myUserId.isNullOrBlank()) {
-                    val fUrl = "https://api.twitch.tv/helix/channels/followers?broadcaster_id=$channelId&user_id=$resolvedId&moderator_id=$myUserId"
-                    val (fOk, fBody) = sendHelixRequest(fUrl, "GET")
-                    if (fOk && !fBody.isNullOrBlank()) {
-                        val arr = JSONObject(fBody).optJSONArray("data")
-                        val obj = arr?.optJSONObject(0)
-                        val rawDate = obj?.optString("followed_at")
-                        if (!rawDate.isNullOrBlank()) {
-                            followedAt = formatIsoDate(rawDate)
-                        }
-                    }
-                }
-            }
-
+        // 2. Дата фоллоу на текущий канал стримера
+        val isStreamer = (resolvedId != null && resolvedId == channelId) ||
+                (channelLogin != null && actualLogin.equals(channelLogin, ignoreCase = true))
+        val isSelf = (myUserId != null && resolvedId == myUserId) ||
+                (myUserLogin != null && actualLogin.equals(myUserLogin, ignoreCase = true))
+
+        if (isStreamer) {
+            followedAt = "Автор канала"
+        } else if (!resolvedId.isNullOrBlank()) {
+            if (isSelf) {
+                // Попытка 1: Helix channels/followed для себя
+                val fUrl = "https://api.twitch.tv/helix/channels/followed?user_id=$resolvedId&broadcaster_id=$channelId"
+                val (fOk, fBody) = sendHelixRequest(fUrl, "GET")
+                if (fOk && !fBody.isNullOrBlank()) {
+                    val arr = JSONObject(fBody).optJSONArray("data")
+                    val obj = arr?.optJSONObject(0)
+                    val rawDate = obj?.optString("followed_at")
+                    if (!rawDate.isNullOrBlank()) {
+                        followedAt = formatIsoDate(rawDate)
+                    }
+                }
+
+                // Попытка 2: GQL relationship через Web API
+                if (followedAt == null) {
+                    try {
+                        val q = """{"query":"query { user(id: \"$channelId\") { relationship { followedAt } } }"}"""
+                        val resp = gql.queryWeb(q)
+                        val rawDate = JSONObject(resp).optJSONObject("data")
+                            ?.optJSONObject("user")
+                            ?.optJSONObject("relationship")
+                            ?.optString("followedAt")
+                        if (!rawDate.isNullOrBlank()) {
+                            followedAt = formatIsoDate(rawDate)
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                // Попытка 3: если известно, что канал зафоловлен, но дата не получена
+                if (followedAt == null) {
+                    if (isChannelFollowed == true) {
+                        followedAt = "Фолловит канал"
+                    } else if (isChannelFollowed == false) {
+                        followedAt = "Не фолловит"
+                    }
+                }
+            } else {
+                // Другой чаттер: проверка через Helix channels/followers (требует прав модератора)
+                if (!myUserId.isNullOrBlank()) {
+                    val fUrl = "https://api.twitch.tv/helix/channels/followers?broadcaster_id=$channelId&user_id=$resolvedId&moderator_id=$myUserId"
+                    val (fOk, fBody) = sendHelixRequest(fUrl, "GET")
+                    if (fOk && !fBody.isNullOrBlank()) {
+                        val arr = JSONObject(fBody).optJSONArray("data")
+                        val obj = arr?.optJSONObject(0)
+                        val rawDate = obj?.optString("followed_at")
+                        if (!rawDate.isNullOrBlank()) {
+                            followedAt = formatIsoDate(rawDate)
+                        }
+                    }
+                }
+            }
+
             // 3. Проверка статуса блокировки
             val bUrl = if (!myUserId.isNullOrBlank()) {
                 "https://api.twitch.tv/helix/moderation/banned?broadcaster_id=$channelId&user_id=$resolvedId"
@@ -344,7 +344,7 @@ class ModRepository(
             userLogin = userLogin,
             displayName = userLogin,
             avatarUrl = avatarUrl,
-            createdAt = createdAt ?: "—",
+            createdAt = createdAt ?: "—",
             followedAt = followedAt ?: if (isStreamer) "Автор канала" else if (isSelf) "Не фолловит" else "— (приватно)",
             isSubscribed = false,
             subTier = null,
@@ -568,10 +568,18 @@ class ModRepository(
     }
 
     /** Загрузка текущих режимов канала (Helix Chat Settings + Shield Mode). */
-    suspend fun fetchChannelModes(channelId: String, myUserId: String): ChannelModesState = withContext(Dispatchers.IO) {
+    suspend fun fetchChannelModes(channelId: String, myUserId: String? = null): ChannelModesState = withContext(Dispatchers.IO) {
         var state = ChannelModesState()
-        val url = "https://api.twitch.tv/helix/chat/settings?broadcaster_id=$channelId&moderator_id=$myUserId"
-        val (ok, body) = sendHelixRequest(url, "GET")
+        val modParam = if (!myUserId.isNullOrBlank()) "&moderator_id=$myUserId" else ""
+        val url = "https://api.twitch.tv/helix/chat/settings?broadcaster_id=$channelId$modParam"
+        var (ok, body) = sendHelixRequest(url, "GET")
+        if (!ok && !myUserId.isNullOrBlank()) {
+            // Фолбэк без moderator_id для обычных зрителей (chat/settings доступен всем)
+            val publicUrl = "https://api.twitch.tv/helix/chat/settings?broadcaster_id=$channelId"
+            val res = sendHelixRequest(publicUrl, "GET")
+            ok = res.first
+            body = res.second
+        }
         if (ok && !body.isNullOrBlank()) {
             val item = JSONObject(body).optJSONArray("data")?.optJSONObject(0)
             if (item != null) {
@@ -587,12 +595,14 @@ class ModRepository(
                 )
             }
         }
-        val shieldUrl = "https://api.twitch.tv/helix/moderation/shield_mode?broadcaster_id=$channelId&moderator_id=$myUserId"
-        val (shOk, shBody) = sendHelixRequest(shieldUrl, "GET")
-        if (shOk && !shBody.isNullOrBlank()) {
-            val shItem = JSONObject(shBody).optJSONArray("data")?.optJSONObject(0)
-            if (shItem != null) {
-                state = state.copy(shieldMode = shItem.optBoolean("is_active", false))
+        if (!myUserId.isNullOrBlank()) {
+            val shieldUrl = "https://api.twitch.tv/helix/moderation/shield_mode?broadcaster_id=$channelId&moderator_id=$myUserId"
+            val (shOk, shBody) = sendHelixRequest(shieldUrl, "GET")
+            if (shOk && !shBody.isNullOrBlank()) {
+                val shItem = JSONObject(shBody).optJSONArray("data")?.optJSONObject(0)
+                if (shItem != null) {
+                    state = state.copy(shieldMode = shItem.optBoolean("is_active", false))
+                }
             }
         }
         state

@@ -226,7 +226,11 @@ class MainActivity : ComponentActivity() {
                                 onDenyUnban = vm::denyUnban,
                                 onSendAnnounce = vm::sendAnnouncement,
                                 onPinMessage = vm::pinChatMessage,
-                                onMinimize = vm::minimizeStream
+                                onMinimize = vm::minimizeStream,
+                                viewerProfile = vm.selectedViewerInfo,
+                                isLoadingViewerProfile = vm.isLoadingViewerInfo,
+                                onUserClick = { msg -> vm.openViewerProfile(msg.senderLogin ?: msg.sender, msg.senderId) },
+                                onDismissViewerProfile = vm::closeViewerProfile
                             )
                         }
 
