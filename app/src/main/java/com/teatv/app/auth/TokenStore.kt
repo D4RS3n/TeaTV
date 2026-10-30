@@ -21,6 +21,18 @@ class TokenStore(context: Context) {
     val isLoggedIn: Boolean
         get() = accessToken != null && helixToken != null
 
+    var userId: String?
+        get() = prefs.getString("user_id", null)
+        set(value) = prefs.edit().putString("user_id", value).apply()
+
+    var userLogin: String?
+        get() = prefs.getString("user_login", null)
+        set(value) = prefs.edit().putString("user_login", value).apply()
+
+    var userDisplayName: String?
+        get() = prefs.getString("user_display_name", null)
+        set(value) = prefs.edit().putString("user_display_name", value).apply()
+
     var deviceId: String
         get() = prefs.getString("device_id", null) ?: run {
             val v = UUID.randomUUID().toString()
@@ -33,6 +45,9 @@ class TokenStore(context: Context) {
         prefs.edit()
             .remove("access_token")
             .remove("helix_token")
+            .remove("user_id")
+            .remove("user_login")
+            .remove("user_display_name")
             .apply()
 
         // Полная очистка веб-куки при выходе из аккаунта

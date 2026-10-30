@@ -58,8 +58,11 @@ fun MainScreen(
     onBufferChange: (Int) -> Unit = {},
     modModeEnabled: Boolean = true,
     onModModeChange: (Boolean) -> Unit = {},
+    modSwipeRequiresSelection: Boolean = true,
+    onModSwipeRequiresSelectionChange: (Boolean) -> Unit = {},
     splitMessagesEnabled: Boolean = true,
-    onSplitMessagesChange: (Boolean) -> Unit = {}
+    onSplitMessagesChange: (Boolean) -> Unit = {},
+    onOpenEmoteOrder: () -> Unit = {}
 ) {
     Scaffold(
         modifier = modifier,
@@ -110,8 +113,11 @@ fun MainScreen(
             MainTab.Tools -> ToolsScreen(
                 modModeEnabled = modModeEnabled,
                 onModModeChange = onModModeChange,
+                modSwipeRequiresSelection = modSwipeRequiresSelection,
+                onModSwipeRequiresSelectionChange = onModSwipeRequiresSelectionChange,
                 splitMessagesEnabled = splitMessagesEnabled,
                 onSplitMessagesChange = onSplitMessagesChange,
+                onOpenEmoteOrder = onOpenEmoteOrder,
                 modifier = Modifier.padding(padding)
             )
         }

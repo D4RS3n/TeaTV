@@ -45,6 +45,9 @@ import com.teatv.app.data.LiveStream
 import com.teatv.app.data.SearchBundle
 import com.teatv.app.data.SearchCategory
 import com.teatv.app.data.SearchChannel
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.platform.LocalContext
+import com.teatv.app.settings.ClientSettingsStore
 import com.teatv.app.ui.theme.TeaColors
 
 @Composable
@@ -58,6 +61,9 @@ internal fun SearchScreen(
     modifier: Modifier = Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val clientSettingsStore = remember(context) { ClientSettingsStore(context) }
+    var searchHistory by remember { mutableStateOf(clientSettingsStore.getSearchHistory()) }
     val screenBg by animateColorAsState(
         targetValue = if (focused) TeaColors.ChatBg else TeaColors.Background,
         animationSpec = tween(220),
@@ -107,7 +113,7 @@ internal fun SearchScreen(
                 ),
                 cursorBrush = SolidColor(TeaColors.Accent),
                 decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
+                    Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.fillMaxWidth()) {
                         if (query.isEmpty()) {
                             Text(
                                 "Категории, каналы, стримы",
@@ -116,9 +122,114 @@ internal fun SearchScreen(
                             )
                         }
                         inner()
+                        if (query.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .clickable { onQuery("") },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("✕", color = TeaColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             )
+        }
+
+        if (focused && searchHistory.isNotEmpty()) {
+            val filteredHistory = remember(query, searchHistory) {
+                if (query.isBlank()) searchHistory
+                else searchHistory.filter { it.contains(query.trim(), ignoreCase = true) }
+            }
+            if (filteredHistory.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 10.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(TeaColors.Surface.copy(alpha = 0.95f))
+                        .border(1.dp, TeaColors.Accent.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                        .padding(vertical = 4.dp)
+                ) {
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "ИСТОРИЯ ПОИСКА",
+                                color = TeaColors.TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "Очистить всё",
+                                color = TeaColors.Accent,
+                                fontSize = 11.sp,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable {
+                                        clientSettingsStore.clearSearchHistory()
+                                        searchHistory = emptyList()
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+
+                        filteredHistory.take(8).forEach { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onQuery(item)
+                                        clientSettingsStore.addSearchHistory(item)
+                                        searchHistory = clientSettingsStore.getSearchHistory()
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "🕒",
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(end = 10.dp)
+                                )
+                                Text(
+                                    text = item,
+                                    color = TeaColors.TextPrimary,
+                                    fontSize = 14.sp,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            clientSettingsStore.removeSearchHistory(item)
+                                            searchHistory = clientSettingsStore.getSearchHistory()
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "✕",
+                                        color = TeaColors.TextSecondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if (loading) {
@@ -139,19 +250,37 @@ internal fun SearchScreen(
                     if (results.categories.isNotEmpty()) {
                         item { SearchSection("Категории") }
                         items(results.categories, key = { "cat_${it.id}" }) { c ->
-                            SearchCategoryRow(c, onOpenCategory)
+                            SearchCategoryRow(c) {
+                                if (query.isNotBlank()) {
+                                    clientSettingsStore.addSearchHistory(query)
+                                    searchHistory = clientSettingsStore.getSearchHistory()
+                                }
+                                onOpenCategory(it)
+                            }
                         }
                     }
                     if (results.channels.isNotEmpty()) {
                         item { SearchSection("Каналы") }
                         items(results.channels, key = { "ch_${it.id}" }) { c ->
-                            SearchChannelRow(c, onOpenChannel)
+                            SearchChannelRow(c) {
+                                if (query.isNotBlank()) {
+                                    clientSettingsStore.addSearchHistory(query)
+                                    searchHistory = clientSettingsStore.getSearchHistory()
+                                }
+                                onOpenChannel(it)
+                            }
                         }
                     }
                     if (results.streams.isNotEmpty()) {
                         item { SearchSection("Стримы") }
                         items(results.streams, key = { "st_${it.userId}" }) { s ->
-                            SearchStreamRow(s, onOpenChannel)
+                            SearchStreamRow(s) {
+                                if (query.isNotBlank()) {
+                                    clientSettingsStore.addSearchHistory(query)
+                                    searchHistory = clientSettingsStore.getSearchHistory()
+                                }
+                                onOpenChannel(it)
+                            }
                         }
                     }
                     if (!hasResults) {

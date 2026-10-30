@@ -22,7 +22,7 @@ import coil.request.ImageRequest
 
 /** Словарь код -> смайл из всех пачек + динамический кэш смайлов Twitch. */
 fun allEmotesLookup(b: EmoteBundles): Map<String, Emote> =
-    (b.frequent + b.user + b.channel + b.seven + b.bttv + b.global + TwitchEmoteCache.getAll().values)
+    (b.favorite + b.user + b.channel + b.seven + b.bttv + b.global + TwitchEmoteCache.getAll().values)
         .distinctBy { it.code }
         .associateBy { it.code }
 

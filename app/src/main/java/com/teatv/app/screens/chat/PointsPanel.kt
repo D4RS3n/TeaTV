@@ -1,9 +1,12 @@
 package com.teatv.app.ui.screens.chat
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,6 +66,7 @@ fun PointsPanel(
     onDismiss: () -> Unit,
     isBot: Boolean,
     onBotToggle: (Boolean) -> Unit,
+    isOwner: Boolean = false,
     hapticFeedbackEnabled: Boolean = true
 ) {
     var inputTarget by remember { mutableStateOf<PointReward?>(null) }
@@ -104,7 +108,7 @@ fun PointsPanel(
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = state.balance
+                        text = if (isOwner) "∞" else state.balance
                             ?.let { String.format("%,d", it).replace(',', ' ') }
                             ?: "—",
                         color = TeaColors.TextPrimary,
@@ -112,7 +116,7 @@ fun PointsPanel(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = state.pointName ?: "баллы канала",
+                        text = if (isOwner) "Владелец канала" else (state.pointName ?: "баллы канала"),
                         color = TeaColors.TextSecondary,
                         fontSize = 12.sp
                     )
@@ -146,7 +150,7 @@ fun PointsPanel(
             Spacer(Modifier.height(12.dp))
             LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
                 items(state.rewards) { r ->
-                    RewardRow(r, state.balance) {
+                    RewardRow(r, state.balance, isOwner) {
                         if (r.isUserInputRequired) {
                             inputTarget = r
                             inputText = ""
@@ -189,7 +193,7 @@ fun PointsPanel(
                         inputTarget = null
                     }
                 ) {
-                    Text("Потратить ${target.cost}", color = TeaColors.Accent)
+                    Text(if (isOwner) "Активировать" else "Потратить ${target.cost}", color = TeaColors.Accent)
                 }
             },
             dismissButton = {
@@ -205,43 +209,85 @@ fun PointsPanel(
 private fun RewardRow(
     r: PointReward,
     balance: Int?,
+    isOwner: Boolean = false,
     onRedeem: () -> Unit
 ) {
     val dim = r.isPaused || r.isOutOfStock
-    val affordable = balance == null || balance >= r.cost
+    val affordable = isOwner || balance == null || balance >= r.cost
     val enabled = !dim && affordable
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    var isClicked by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    val isDarkened = isPressed || isClicked
+
+    val darkenedColor = remember(TeaColors.Surface) {
+        Color(
+            red = (TeaColors.Surface.red * 0.45f).coerceIn(0f, 1f),
+            green = (TeaColors.Surface.green * 0.45f).coerceIn(0f, 1f),
+            blue = (TeaColors.Surface.blue * 0.45f).coerceIn(0f, 1f),
+            alpha = TeaColors.Surface.alpha
+        )
+    }
+
+    val animatedBg by animateColorAsState(
+        targetValue = if (isDarkened) darkenedColor else TeaColors.Surface,
+        animationSpec = tween(durationMillis = 150),
+        label = "RewardRowBg"
+    )
+
+    val animatedScale by animateFloatAsState(
+        targetValue = if (isDarkened) 0.97f else 1f,
+        animationSpec = tween(durationMillis = 150),
+        label = "RewardRowScale"
+    )
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(TeaColors.Surface)
-            .clickable(enabled = enabled) { onRedeem() }
-            .padding(12.dp)
-            .alpha(if (enabled) 1f else 0.45f)
+            .background(Color.Transparent)
     ) {
-        PointIcon(r.imageUrl, 28)
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = r.title,
-            color = TeaColors.TextPrimary,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(8.dp))
-        Box(
+        Row(
             modifier = Modifier
-                .background(TeaColors.Background, CircleShape)
-                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(enabled = enabled, interactionSource = interactionSource, indication = null) {
+                    isClicked = true
+                    scope.launch {
+                        delay(120)
+                        isClicked = false
+                        onRedeem()
+                    }
+                }
+                .alpha(if (enabled) 1f else 0.5f)
+                .background(animatedBg, RoundedCornerShape(8.dp))
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            PointIcon(r.imageUrl, 28)
+            Spacer(Modifier.width(12.dp))
             Text(
-                text = String.format("%,d", r.cost).replace(',', ' '),
-                color = if (affordable) TeaColors.Accent else TeaColors.TextSecondary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
+                text = r.title,
+                color = TeaColors.TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
             )
+            Spacer(Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .background(TeaColors.Background, CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = String.format("%,d", r.cost).replace(',', ' '),
+                    color = if (affordable) TeaColors.Accent else TeaColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Scaffold
 import com.teatv.app.screens.settings.AccountSettingsScreen
 import com.teatv.app.screens.settings.ClientSettingsScreen
+import com.teatv.app.screens.settings.EmoteOrderSettingsScreen
 import com.teatv.app.screens.settings.SettingsScreen
 import com.teatv.app.screens.settings.miniplayer.MiniPlayerOverlay
 import androidx.compose.ui.Modifier
@@ -114,7 +115,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
 
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -131,12 +135,14 @@ class MainActivity : ComponentActivity() {
                         vm.screen == Screen.Subscriptions ||
                         vm.screen == Screen.Settings ||
                         vm.screen == Screen.AccountSettings ||
-                        vm.screen == Screen.ClientSettings
+                        vm.screen == Screen.ClientSettings ||
+                        vm.screen == Screen.EmoteOrderSettings
             ) {
                 when (vm.screen) {
                     Screen.Subscriptions -> vm.backToAccount()
                     Screen.Settings -> vm.openAccount()
                     Screen.AccountSettings, Screen.ClientSettings -> vm.openSettings()
+                    Screen.EmoteOrderSettings -> vm.backFromEmoteOrderSettings()
                     else -> vm.backToHome()
                 }
             }
@@ -183,6 +189,9 @@ class MainActivity : ComponentActivity() {
                                 playbackUrl = vm.playbackUrl,
                                 onSend = vm::sendChat,
                                 emotes = vm.emotes,
+                                onToggleFavoriteEmote = vm::toggleFavoriteEmote,
+                                categoryOrder = vm.emoteCategoryOrder,
+                                modSwipeRequiresSelection = vm.modSwipeRequiresSelection,
                                 onRedeemReward = vm::redeemReward,
                                 badges = vm.badgeMap,
                                 points = vm.points,
@@ -195,6 +204,7 @@ class MainActivity : ComponentActivity() {
                                 replySettings = vm.replySettings,
                                 isMinimized = { vm.isStreamMinimized },
                                 isModerator = vm.isCurrentStreamModerator && vm.isModModeActive,
+                                isOwner = vm.isCurrentStreamOwner,
                                 bufferSeconds = vm.videoBufferSizeSeconds,
                                 splitMessagesEnabled = vm.isSplitMessagesActive,
                                 selectedChatter = vm.selectedChatterInfo,
@@ -242,8 +252,6 @@ class MainActivity : ComponentActivity() {
                             onOpenSettings = vm::openSettings
                         )
 
-
-
                         Screen.Settings -> SettingsScreen(
                             onBack = vm::openAccount,
                             onOpenAccountSettings = vm::openAccountSettings,
@@ -260,6 +268,13 @@ class MainActivity : ComponentActivity() {
                             clientSettingsStore = vm.clientSettingsStore,
                             replySettingsStore = vm.replySettingsStore,
                             onBack = vm::openSettings
+                        )
+
+                        Screen.EmoteOrderSettings -> EmoteOrderSettingsScreen(
+                            categories = vm.getAvailableEmoteCategories(),
+                            onSaveOrder = vm::saveEmoteCategoryOrder,
+                            onResetDefault = vm::resetEmoteCategoryOrder,
+                            onBack = vm::backFromEmoteOrderSettings
                         )
 
                         Screen.Subscriptions -> SubscriptionsScreen(
@@ -377,8 +392,11 @@ class MainActivity : ComponentActivity() {
                             onBufferChange = vm::setVideoBufferSize,
                             modModeEnabled = vm.isModModeActive,
                             onModModeChange = vm::setModModeEnabled,
+                            modSwipeRequiresSelection = vm.modSwipeRequiresSelection,
+                            onModSwipeRequiresSelectionChange = vm::updateModSwipeRequiresSelection,
                             splitMessagesEnabled = vm.isSplitMessagesActive,
-                            onSplitMessagesChange = vm::setSplitMessagesEnabled
+                            onSplitMessagesChange = vm::setSplitMessagesEnabled,
+                            onOpenEmoteOrder = vm::openEmoteOrderSettings
                         )
                     }
                 }
@@ -387,7 +405,7 @@ class MainActivity : ComponentActivity() {
                     MiniPlayerOverlay(
                         sizeStep = vm.clientSettingsStore.miniPlayerSizeStep,
                         onMaximize = vm::maximizeStream,
-                        onClose = vm::closeStream
+                        onClose = vm::closeMiniPlayer
                     )
                 }
             }

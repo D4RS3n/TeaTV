@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Основная тема приложения -->
-    <style name="Theme.TeaTV" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Основная тема приложения: темная для белых иконок статус-бара -->
+    <style name="Theme.TeaTV" parent="android:Theme.Material.NoActionBar" />
 
     <!-- Тема первого мгновения: брендовый системный splash -->
     <style name="Theme.TeaTV.Starting" parent="Theme.SplashScreen">

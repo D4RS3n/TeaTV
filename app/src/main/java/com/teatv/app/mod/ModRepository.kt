@@ -28,23 +28,32 @@ class ModRepository(
 
     private val userIdCache = ConcurrentHashMap<String, String>()
 
-    /** Выполнение HTTP запроса к Helix API с OWN_CLIENT_ID. */
-    private suspend fun sendHelixRequest(
+    /** Ручное сохранение ID пользователя в кэш. */
+    fun cacheUserId(userLoginOrName: String, userId: String) {
+        if (userLoginOrName.isNotBlank() && userId.isNotBlank()) {
+            userIdCache[userLoginOrName.trim().removePrefix("@").lowercase()] = userId
+        }
+    }
+
+    /** Выполнение сырого HTTP запроса с заданными заголовками авторизации. */
+    private suspend fun executeRawHttp(
         url: String,
         method: String,
-        jsonBody: String? = null
-    ): Pair<Boolean, String?> = withContext(Dispatchers.IO) {
-        val token = tokenStore.helixToken ?: tokenStore.accessToken ?: return@withContext false to null
-        val cid = TwitchAuth.OWN_CLIENT_ID
+        jsonBody: String?,
+        clientId: String,
+        authHeader: String
+    ): Pair<Int, String?> {
         val reqBuilder = Request.Builder()
             .url(url)
-            .header("Client-ID", cid)
-            .header("Authorization", "Bearer $token")
+            .header("Client-Id", clientId)
+            .header("Authorization", authHeader)
+
         val req = when (method) {
             "GET" -> reqBuilder.get().build()
             "DELETE" -> reqBuilder.delete().build()
             "POST" -> {
-                val body = (jsonBody ?: "{}").toRequestBody("application/json".toMediaType())
+                val body = if (jsonBody != null) jsonBody.toRequestBody("application/json".toMediaType())
+                else ByteArray(0).toRequestBody(null)
                 reqBuilder.post(body).build()
             }
             "PATCH" -> {
@@ -52,29 +61,101 @@ class ModRepository(
                 reqBuilder.patch(body).build()
             }
             "PUT" -> {
-                val body = (jsonBody ?: "{}").toRequestBody("application/json".toMediaType())
+                val body = if (jsonBody != null) jsonBody.toRequestBody("application/json".toMediaType())
+                else ByteArray(0).toRequestBody(null)
                 reqBuilder.put(body).build()
             }
             else -> reqBuilder.build()
         }
-        try {
+        return try {
             client.newCall(req).execute().use { resp ->
-                val bodyStr = resp.body?.string().orEmpty()
-                if (resp.isSuccessful) {
-                    return@withContext true to bodyStr
-                } else {
-                    Log.d("TeaTV-ModRepo", "Helix $method $url: ${resp.code} $bodyStr")
-                }
+                resp.code to resp.body?.string().orEmpty()
             }
         } catch (e: Exception) {
-            Log.d("TeaTV-ModRepo", "Helix $method $url error: ${e.message}")
+            Log.d("TeaTV-ModRepo", "HTTP $method $url error: ${e.message}")
+            -1 to null
         }
-        false to null
+    }
+
+    /**
+     * Выполнение HTTP запроса к Helix API с интеллектуальным двухфазным токеном:
+     * Фаза 1: Официальный OAuth токен заявки с OWN_CLIENT_ID (Bearer $helixToken).
+     * Фаза 2: Фоллбэк на сессионный веб-токен (auth-token) с WEB_CLIENT_ID (OAuth $accessToken),
+     *         если helixToken отсутствует, просрочен (401) или не имеет необходимых прав (403).
+     */
+    private suspend fun sendHelixRequest(
+        url: String,
+        method: String,
+        jsonBody: String? = null
+    ): Pair<Boolean, String?> = withContext(Dispatchers.IO) {
+        val helixToken = tokenStore.helixToken
+        val accessToken = tokenStore.accessToken
+
+        var lastCode = -1
+        var lastBody: String? = null
+
+        // Фаза 1: Пробуем официальный Helix OAuth токен своей заявки
+        if (!helixToken.isNullOrBlank()) {
+            val (code, body) = executeRawHttp(
+                url = url,
+                method = method,
+                jsonBody = jsonBody,
+                clientId = TwitchAuth.OWN_CLIENT_ID,
+                authHeader = "Bearer $helixToken"
+            )
+            if (code in 200..299) {
+                return@withContext true to body
+            }
+            lastCode = code
+            lastBody = body
+            Log.d("TeaTV-ModRepo", "Helix Phase 1 ($method $url) code $code: $body")
+        }
+
+        // Фаза 2: Фоллбэк на сессионный веб-токен с WEB_CLIENT_ID
+        if (!accessToken.isNullOrBlank() && (lastCode == 401 || lastCode == 403 || lastCode == -1 || helixToken.isNullOrBlank())) {
+            // Сначала пробуем стандартный для Helix заголовок Bearer
+            val (webCode, webBody) = executeRawHttp(
+                url = url,
+                method = method,
+                jsonBody = jsonBody,
+                clientId = TwitchAuth.WEB_CLIENT_ID,
+                authHeader = "Bearer $accessToken"
+            )
+            if (webCode in 200..299) {
+                Log.i("TeaTV-ModRepo", "Helix Phase 2 (Bearer Web token) succeeded for $method $url")
+                return@withContext true to webBody
+            }
+            lastCode = webCode
+            lastBody = webBody
+
+            // Если Bearer не принят (401), пробуем префикс OAuth
+            if (webCode == 401) {
+                val (oauthCode, oauthBody) = executeRawHttp(
+                    url = url,
+                    method = method,
+                    jsonBody = jsonBody,
+                    clientId = TwitchAuth.WEB_CLIENT_ID,
+                    authHeader = "OAuth $accessToken"
+                )
+                if (oauthCode in 200..299) {
+                    Log.i("TeaTV-ModRepo", "Helix Phase 2 (OAuth Web token) succeeded for $method $url")
+                    return@withContext true to oauthBody
+                }
+                lastCode = oauthCode
+                lastBody = oauthBody
+            }
+            Log.d("TeaTV-ModRepo", "Helix Phase 2 ($method $url) code $lastCode: $lastBody")
+        }
+
+        false to lastBody
     }
 
     /** Проверка, является ли текущий пользователь модератором или владельцем канала. */
     suspend fun isModerator(channelId: String, channelLogin: String, myUserId: String?, myUserLogin: String?): Boolean = withContext(Dispatchers.IO) {
-        if (!myUserId.isNullOrBlank() && (channelId == myUserId || channelLogin.equals(myUserLogin, ignoreCase = true))) {
+        val uid = myUserId ?: tokenStore.userId
+        val ulogin = myUserLogin ?: tokenStore.userLogin
+        if ((!uid.isNullOrBlank() && channelId == uid) ||
+            (!ulogin.isNullOrBlank() && channelLogin.equals(ulogin, ignoreCase = true))) {
             return@withContext true
         }
 
@@ -125,23 +206,77 @@ class ModRepository(
         false
     }
 
-    /** Резолв логина пользователя в его численный ID с кэшированием. */
+    /** Резолв логина или отображаемого имени пользователя в его численный ID с кэшированием. */
     suspend fun resolveUserId(userLogin: String): String? = withContext(Dispatchers.IO) {
-        userIdCache[userLogin.lowercase()]?.let { return@withContext it }
-        val url = "https://api.twitch.tv/helix/users?login=${userLogin.lowercase()}"
-        val (ok, body) = sendHelixRequest(url, "GET")
-        if (ok && !body.isNullOrBlank()) {
-            val arr = JSONObject(body).optJSONArray("data")
-            val id = arr?.optJSONObject(0)?.optString("id")
+        val clean = userLogin.trim().removePrefix("@")
+        if (clean.isBlank()) return@withContext null
+        val lower = clean.lowercase()
+        userIdCache[lower]?.let { return@withContext it }
+
+        // Если передан уже численный ID
+        if (clean.all { it.isDigit() }) {
+            userIdCache[lower] = clean
+            return@withContext clean
+        }
+
+        // 1. Быстрая проверка текущего пользователя
+        if (clean.equals(tokenStore.userLogin, ignoreCase = true) && !tokenStore.userId.isNullOrBlank()) {
+            userIdCache[lower] = tokenStore.userId!!
+            return@withContext tokenStore.userId
+        }
+
+        // 2. Через GQL (быстро, надежно, работает для любых пользователей)
+        try {
+            val q = """{"query":"query { user(login: \"$lower\") { id login displayName } }"}"""
+            val resp = gql.queryWeb(q)
+            val uObj = JSONObject(resp).optJSONObject("data")?.optJSONObject("user")
+            val id = uObj?.optString("id")
             if (!id.isNullOrBlank()) {
-                userIdCache[userLogin.lowercase()] = id
+                userIdCache[lower] = id
+                uObj.optString("displayName").takeIf { it.isNotBlank() }?.let {
+                    userIdCache[it.lowercase()] = id
+                }
                 return@withContext id
             }
+        } catch (_: Exception) {}
+
+        // 3. Если строка содержит допустимые ASCII символы логина Twitch [a-zA-Z0-9_]
+        val isAsciiLogin = clean.matches(Regex("^[a-zA-Z0-9_]+$"))
+        if (isAsciiLogin) {
+            val url = "https://api.twitch.tv/helix/users?login=$lower"
+            val (ok, body) = sendHelixRequest(url, "GET")
+            if (ok && !body.isNullOrBlank()) {
+                val arr = JSONObject(body).optJSONArray("data")
+                val id = arr?.optJSONObject(0)?.optString("id")
+                if (!id.isNullOrBlank()) {
+                    userIdCache[lower] = id
+                    return@withContext id
+                }
+            }
         }
+
+        // 4. Если логин содержит не-ASCII символы (русский displayName) или не найден по прямому логину,
+        // ищем через Helix поиск каналов
+        try {
+            val token = tokenStore.helixToken ?: tokenStore.accessToken
+            if (!token.isNullOrBlank()) {
+                val searchResults = api.searchChannels(clean, token, first = 5)
+                val matched = searchResults.firstOrNull {
+                    it.login.equals(clean, ignoreCase = true) ||
+                            it.displayName.equals(clean, ignoreCase = true)
+                } ?: searchResults.firstOrNull()
+                if (matched != null && matched.id.isNotBlank()) {
+                    userIdCache[lower] = matched.id
+                    userIdCache[matched.login.lowercase()] = matched.id
+                    return@withContext matched.id
+                }
+            }
+        } catch (_: Exception) {}
+
         null
     }
 
-    /** Выполнение модераторского действия (наказания) через Helix Moderation API. */
+    /** Выполнение модераторского действия (наказания) через Helix Moderation API с чат-фоллбэком. */
     suspend fun executeSliderAction(
         channelId: String,
         channelLogin: String,
@@ -149,39 +284,93 @@ class ModRepository(
         targetUser: String,
         targetUserId: String?,
         messageId: String,
-        action: ModSliderAction
+        action: ModSliderAction,
+        targetUserLogin: String? = null,
+        reason: String? = null
     ): Boolean = withContext(Dispatchers.IO) {
         when (action) {
             ModSliderAction.NONE -> return@withContext false
             ModSliderAction.DELETE -> {
-                val url = "https://api.twitch.tv/helix/moderation/chat?broadcaster_id=$channelId&moderator_id=$myUserId&message_id=$messageId"
-                val (ok, _) = sendHelixRequest(url, "DELETE")
-                if (ok) {
-                    Log.i("TeaTV-ModRepo", "Message $messageId deleted on $channelLogin")
+                if (messageId.isNotBlank()) {
+                    val url = "https://api.twitch.tv/helix/moderation/chat?broadcaster_id=$channelId&moderator_id=$myUserId&message_id=$messageId"
+                    val (ok, _) = sendHelixRequest(url, "DELETE")
+                    if (ok) {
+                        Log.i("TeaTV-ModRepo", "Message $messageId deleted on $channelLogin")
+                        return@withContext true
+                    }
                 }
-                ok
+                // Фоллбэк: если прямое удаление сообщения недоступно, выполняем purge сообщений пользователя через Helix ban API с таймаутом на 1 секунду.
+                // Никаких сообщений в чат (через sendChatMessage) НЕ отправляем!
+                val resolvedId = targetUserId?.takeIf { it.isNotBlank() }
+                    ?: targetUserLogin?.takeIf { it.isNotBlank() }?.let { resolveUserId(it) }
+                    ?: resolveUserId(targetUser)
+                if (!resolvedId.isNullOrBlank()) {
+                    val dataJson = JSONObject().apply {
+                        put("user_id", resolvedId)
+                        put("duration", 1)
+                        put("reason", reason ?: "Message delete (purge)")
+                    }
+                    val body = JSONObject().apply { put("data", dataJson) }.toString()
+                    val url = "https://api.twitch.tv/helix/moderation/bans?broadcaster_id=$channelId&moderator_id=$myUserId"
+                    val (ok, _) = sendHelixRequest(url, "POST", body)
+                    if (ok) {
+                        Log.i("TeaTV-ModRepo", "Message purged via 1s timeout for $targetUser ($resolvedId)")
+                        return@withContext true
+                    }
+                }
+                false
             }
             else -> {
-                val resolvedId = targetUserId?.takeIf { it.isNotBlank() } ?: resolveUserId(targetUser)
-                if (resolvedId.isNullOrBlank()) {
-                    Log.e("TeaTV-ModRepo", "Cannot resolve userId for $targetUser")
-                    return@withContext false
-                }
+                // Приоритет резолва ID: targetUserId -> targetUserLogin -> targetUser
+                val resolvedId = targetUserId?.takeIf { it.isNotBlank() }
+                    ?: targetUserLogin?.takeIf { it.isNotBlank() }?.let { resolveUserId(it) }
+                    ?: resolveUserId(targetUser)
+
                 val durationSec = action.durationSeconds
-                val dataJson = JSONObject().apply {
-                    put("user_id", resolvedId)
-                    if (durationSec != null) put("duration", durationSec)
-                    put("reason", "Moderation slider action")
+                var helixSuccess = false
+
+                if (!resolvedId.isNullOrBlank()) {
+                    val dataJson = JSONObject().apply {
+                        put("user_id", resolvedId)
+                        if (durationSec != null) put("duration", durationSec)
+                        put("reason", reason ?: "Moderation action")
+                    }
+                    val body = JSONObject().apply { put("data", dataJson) }.toString()
+                    val url = "https://api.twitch.tv/helix/moderation/bans?broadcaster_id=$channelId&moderator_id=$myUserId"
+                    val (ok, _) = sendHelixRequest(url, "POST", body)
+                    if (ok) {
+                        Log.i("TeaTV-ModRepo", "Action $action applied to $targetUser ($resolvedId)")
+                        helixSuccess = true
+                    }
+                } else {
+                    Log.w("TeaTV-ModRepo", "Could not resolve numeric ID for $targetUser ($targetUserLogin)")
                 }
-                val body = JSONObject().apply { put("data", dataJson) }.toString()
-                val url = "https://api.twitch.tv/helix/moderation/bans?broadcaster_id=$channelId&moderator_id=$myUserId"
-                val (ok, _) = sendHelixRequest(url, "POST", body)
-                if (ok) {
-                    Log.i("TeaTV-ModRepo", "Action $action applied to $targetUser ($resolvedId)")
-                }
-                ok
+
+                if (helixSuccess) return@withContext true
+                false
             }
         }
+    }
+
+    /** Выдача таймаута на произвольное количество секунд. */
+    suspend fun timeoutUser(
+        channelId: String,
+        myUserId: String,
+        targetUser: String,
+        durationSeconds: Int = 600,
+        reason: String = "Timeout by command"
+    ): Boolean = withContext(Dispatchers.IO) {
+        val resolvedId = resolveUserId(targetUser) ?: return@withContext false
+        val validDuration = durationSeconds.coerceIn(1, 1209600)
+        val dataJson = JSONObject().apply {
+            put("user_id", resolvedId)
+            put("duration", validDuration)
+            put("reason", reason)
+        }
+        val body = JSONObject().apply { put("data", dataJson) }.toString()
+        val url = "https://api.twitch.tv/helix/moderation/bans?broadcaster_id=$channelId&moderator_id=$myUserId"
+        val (ok, _) = sendHelixRequest(url, "POST", body)
+        ok
     }
 
     /** Разбан пользователя через Helix. */
@@ -189,13 +378,163 @@ class ModRepository(
         channelId: String,
         myUserId: String,
         targetUser: String,
-        targetUserId: String? = null
+        targetUserId: String? = null,
+        targetUserLogin: String? = null
     ): Boolean = withContext(Dispatchers.IO) {
-        val resolvedId = targetUserId?.takeIf { it.isNotBlank() } ?: resolveUserId(targetUser)
-        if (resolvedId.isNullOrBlank()) return@withContext false
-        val url = "https://api.twitch.tv/helix/moderation/bans?broadcaster_id=$channelId&moderator_id=$myUserId&user_id=$resolvedId"
-        val (ok, _) = sendHelixRequest(url, "DELETE")
-        ok
+        val resolvedId = targetUserId?.takeIf { it.isNotBlank() }
+            ?: targetUserLogin?.takeIf { it.isNotBlank() }?.let { resolveUserId(it) }
+            ?: resolveUserId(targetUser)
+
+        if (!resolvedId.isNullOrBlank()) {
+            val url = "https://api.twitch.tv/helix/moderation/bans?broadcaster_id=$channelId&moderator_id=$myUserId&user_id=$resolvedId"
+            val (ok, _) = sendHelixRequest(url, "DELETE")
+            if (ok) return@withContext true
+        }
+        false
+    }
+
+    /** Добавить модератора канала (POST /helix/moderation/moderators). */
+    suspend fun addModerator(channelId: String, myUserId: String, targetUser: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val userId = resolveUserId(targetUser)
+        if (userId.isNullOrBlank()) {
+            return@withContext false to "Пользователь @$targetUser не найден"
+        }
+        val bId = channelId.ifBlank { tokenStore.userId.orEmpty() }.ifBlank { myUserId }
+        val url = "https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=$bId&user_id=$userId"
+        val (ok, body) = sendHelixRequest(url, "POST")
+        if (ok) return@withContext true to "Пользователь @$targetUser назначен модератором"
+        false to (parseHelixErrorMessage(body, "Не удалось назначить модератора (проверьте права)") ?: "Ошибка назначения модератора")
+    }
+
+    /** Снять модератора канала (DELETE /helix/moderation/moderators). */
+    suspend fun removeModerator(channelId: String, myUserId: String, targetUser: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val userId = resolveUserId(targetUser)
+        if (userId.isNullOrBlank()) {
+            return@withContext false to "Пользователь @$targetUser не найден"
+        }
+        val bId = channelId.ifBlank { tokenStore.userId.orEmpty() }.ifBlank { myUserId }
+        val url = "https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=$bId&user_id=$userId"
+        val (ok, body) = sendHelixRequest(url, "DELETE")
+        if (ok) return@withContext true to "Пользователь @$targetUser снят с должности модератора"
+        false to (parseHelixErrorMessage(body, "Не удалось снять модератора (проверьте права)") ?: "Ошибка снятия модератора")
+    }
+
+    /** Назначить VIP канала (POST /helix/channels/vips). */
+    suspend fun addVip(channelId: String, myUserId: String, targetUser: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val userId = resolveUserId(targetUser)
+        if (userId.isNullOrBlank()) {
+            return@withContext false to "Пользователь @$targetUser не найден"
+        }
+        val bId = channelId.ifBlank { tokenStore.userId.orEmpty() }.ifBlank { myUserId }
+        val url = "https://api.twitch.tv/helix/channels/vips?broadcaster_id=$bId&user_id=$userId"
+        val (ok, body) = sendHelixRequest(url, "POST")
+        if (ok) return@withContext true to "Пользователь @$targetUser добавлен в список VIP"
+        false to (parseHelixErrorMessage(body, "Не удалось выдать VIP (проверьте лимит VIP или права)") ?: "Ошибка выдачи VIP")
+    }
+
+    /** Снять VIP канала (DELETE /helix/channels/vips). */
+    suspend fun removeVip(channelId: String, myUserId: String, targetUser: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val userId = resolveUserId(targetUser)
+        if (userId.isNullOrBlank()) {
+            return@withContext false to "Пользователь @$targetUser не найден"
+        }
+        val bId = channelId.ifBlank { tokenStore.userId.orEmpty() }.ifBlank { myUserId }
+        val url = "https://api.twitch.tv/helix/channels/vips?broadcaster_id=$bId&user_id=$userId"
+        val (ok, body) = sendHelixRequest(url, "DELETE")
+        if (ok) return@withContext true to "Пользователь @$targetUser удален из списка VIP"
+        false to (parseHelixErrorMessage(body, "Не удалось снять VIP (проверьте права)") ?: "Ошибка снятия VIP")
+    }
+
+    /** Очистить весь чат канала (/clear). */
+    suspend fun clearChat(channelId: String, myUserId: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val mId = myUserId.ifBlank { tokenStore.userId.orEmpty() }
+        val url = "https://api.twitch.tv/helix/moderation/chat?broadcaster_id=$channelId&moderator_id=$mId"
+        val (ok, body) = sendHelixRequest(url, "DELETE")
+        if (ok) return@withContext true to "Чат канала очищен"
+        false to (parseHelixErrorMessage(body) ?: "Не удалось очистить чат (проверьте права)")
+    }
+
+    suspend fun setSlowMode(channelId: String, myUserId: String, seconds: Int): Boolean = withContext(Dispatchers.IO) {
+        val patch = JSONObject().apply {
+            put("slow_mode", seconds > 0)
+            if (seconds > 0) put("slow_mode_wait_time", seconds)
+        }
+        updateChatSettings(channelId, myUserId, patch)
+    }
+
+    suspend fun setFollowersMode(channelId: String, myUserId: String, minutes: Int): Boolean = withContext(Dispatchers.IO) {
+        val patch = JSONObject().apply {
+            put("follower_mode", minutes >= 0)
+            if (minutes >= 0) put("follower_mode_duration", minutes)
+        }
+        updateChatSettings(channelId, myUserId, patch)
+    }
+
+    suspend fun setSubOnlyMode(channelId: String, myUserId: String, enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val patch = JSONObject().apply {
+            put("subscriber_mode", enabled)
+        }
+        updateChatSettings(channelId, myUserId, patch)
+    }
+
+    suspend fun setEmoteOnlyMode(channelId: String, myUserId: String, enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val patch = JSONObject().apply {
+            put("emote_mode", enabled)
+        }
+        updateChatSettings(channelId, myUserId, patch)
+    }
+
+    /** Запуск рекламы на канале (/commercial [30, 60, 90, 120, 150, 180]). */
+    suspend fun startCommercial(channelId: String, myUserId: String, lengthSeconds: Int = 30): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val validLength = when (lengthSeconds) {
+            30, 60, 90, 120, 150, 180 -> lengthSeconds
+            else -> 30
+        }
+        val url = "https://api.twitch.tv/helix/channels/commercial"
+        val body = JSONObject().apply {
+            put("broadcaster_id", channelId)
+            put("length", validLength)
+        }.toString()
+        val (ok, respBody) = sendHelixRequest(url, "POST", body)
+        if (ok) return@withContext true to "Реклама на $validLength сек запущена"
+        false to (parseHelixErrorMessage(respBody) ?: "Не удалось запустить рекламу (кулдаун или нет прав компаньона/партнера)")
+    }
+
+    /** Смена цвета ника пользователя в чате (/color). */
+    suspend fun setChatColor(myUserId: String, color: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val cleanColor = color.trim().lowercase()
+        val url = "https://api.twitch.tv/helix/chat/color?user_id=$myUserId&color=${android.net.Uri.encode(cleanColor)}"
+        val (ok, body) = sendHelixRequest(url, "PUT")
+        if (ok) return@withContext true to "Цвет ника изменен на $cleanColor"
+        false to (parseHelixErrorMessage(body) ?: "Не удалось изменить цвет ника")
+    }
+
+    private fun parseHelixErrorMessage(body: String?, defaultAction: String? = null): String? {
+        if (body.isNullOrBlank()) return defaultAction
+        return try {
+            val json = JSONObject(body)
+            val msg = json.optString("message")
+            if (msg.isNotBlank()) {
+                val lower = msg.lowercase()
+                when {
+                    lower.contains("missing scope") -> "Требуется перелогиниться в аккаунт для обновления прав Twitch"
+                    lower.contains("already a moderator") -> "Пользователь уже является модератором"
+                    lower.contains("not a moderator") -> "Пользователь не является модератором"
+                    lower.contains("already a vip") -> "Пользователь уже является VIP"
+                    lower.contains("not a vip") -> "Пользователь не является VIP"
+                    lower.contains("max vips") || lower.contains("vip limit") -> "Достигнут лимит VIP на канале"
+                    lower.contains("broadcaster cannot") -> "Владелец канала не может быть модератором или VIP"
+                    lower.contains("not found") -> "Пользователь или канал не найден"
+                    lower.contains("forbidden") || lower.contains("not authorized") -> (defaultAction ?: "Нет прав доступа к этому действию")
+                    else -> msg
+                }
+            } else {
+                val err = json.optString("error")
+                if (err.isNotBlank()) "${defaultAction ?: "Ошибка"}: $err" else defaultAction
+            }
+        } catch (_: Exception) {
+            defaultAction
+        }
     }
 
     /** Загрузка полной информации о чаттере (Twitch + 7TV). */

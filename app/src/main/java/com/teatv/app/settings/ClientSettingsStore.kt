@@ -3,11 +3,14 @@ package com.teatv.app.settings
 import android.content.Context
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import com.teatv.app.chat.emotes.Emote
+import com.teatv.app.chat.emotes.EmoteKind
 import com.teatv.app.ui.theme.TeaColors
 import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 
-/** Хранилище общих настроек клиента: размер шрифта чата, цвета темы, мини-плеер, темы оформления. */
+/** Хранилище общих настроек клиента: размер шрифта чата, цвета темы, мини-плеер, темы оформления, смайлики. */
 class ClientSettingsStore(context: Context) {
 
     private val prefs = context.applicationContext
@@ -37,6 +40,16 @@ class ClientSettingsStore(context: Context) {
     var modModeEnabled: Boolean
         get() = prefs.getBoolean(KEY_MOD_MODE_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_MOD_MODE_ENABLED, value).apply()
+
+    /** Требовать ли предварительное выделение сообщения для модераторского свайпа. По умолчанию включено (true). */
+    var modSwipeRequiresSelection: Boolean
+        get() = prefs.getBoolean(KEY_MOD_SWIPE_REQUIRES_SELECTION, true)
+        set(value) = prefs.edit().putBoolean(KEY_MOD_SWIPE_REQUIRES_SELECTION, value).apply()
+
+    /** Оставлять ли открытой панель смайликов после выбора смайлика. По умолчанию включено (true). */
+    var keepEmotePanelOpen: Boolean
+        get() = prefs.getBoolean(KEY_KEEP_EMOTE_PANEL_OPEN, true)
+        set(value) = prefs.edit().putBoolean(KEY_KEEP_EMOTE_PANEL_OPEN, value).apply()
 
     /** Автоматическое разделение длинных сообщений (>500 символов) на несколько частей. По умолчанию включено. */
     var splitLongMessagesEnabled: Boolean
@@ -75,6 +88,121 @@ class ClientSettingsStore(context: Context) {
             .apply()
     }
 
+    // --- Избранные смайлики ---
+
+    fun getFavoriteEmotes(): List<Emote> {
+        val raw = prefs.getString(KEY_FAVORITE_EMOTES, null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            val list = mutableListOf<Emote>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val kindStr = obj.optString("kind", "TWITCH")
+                val kind = runCatching { EmoteKind.valueOf(kindStr) }.getOrDefault(EmoteKind.TWITCH)
+                list.add(
+                    Emote(
+                        code = obj.optString("code"),
+                        url = obj.optString("url"),
+                        kind = kind,
+                        aspectRatio = obj.optDouble("aspectRatio", 1.0).toFloat(),
+                        isZeroWidth = obj.optBoolean("isZeroWidth", false),
+                        isUnlocked = obj.optBoolean("isUnlocked", true),
+                        ownerId = obj.optString("ownerId").takeIf { it.isNotBlank() },
+                        channelName = obj.optString("channelName").takeIf { it.isNotBlank() },
+                        emoteType = obj.optString("emoteType").takeIf { it.isNotBlank() }
+                    )
+                )
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun saveFavoriteEmotes(list: List<Emote>) {
+        val array = JSONArray()
+        list.forEach { e ->
+            val obj = JSONObject().apply {
+                put("code", e.code)
+                put("url", e.url)
+                put("kind", e.kind.name)
+                put("aspectRatio", e.aspectRatio.toDouble())
+                put("isZeroWidth", e.isZeroWidth)
+                put("isUnlocked", e.isUnlocked)
+                put("ownerId", e.ownerId ?: "")
+                put("channelName", e.channelName ?: "")
+                put("emoteType", e.emoteType ?: "")
+            }
+            array.put(obj)
+        }
+        prefs.edit().putString(KEY_FAVORITE_EMOTES, array.toString()).apply()
+    }
+
+    // --- Порядок категорий смайликов ---
+
+    fun getEmoteCategoryOrder(): List<String> {
+        val raw = prefs.getString(KEY_EMOTE_CATEGORY_ORDER, null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            val list = mutableListOf<String>()
+            for (i in 0 until array.length()) {
+                val str = array.getString(i)
+                if (str.isNotBlank()) list.add(str)
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun saveEmoteCategoryOrder(order: List<String>) {
+        val array = JSONArray()
+        order.forEach { array.put(it) }
+        prefs.edit().putString(KEY_EMOTE_CATEGORY_ORDER, array.toString()).apply()
+    }
+
+    // --- История поиска ---
+
+    fun getSearchHistory(): List<String> {
+        val raw = prefs.getString(KEY_SEARCH_HISTORY, null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            val list = mutableListOf<String>()
+            for (i in 0 until array.length()) {
+                val str = array.getString(i).trim()
+                if (str.isNotBlank() && str !in list) list.add(str)
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun addSearchHistory(query: String) {
+        val clean = query.trim()
+        if (clean.isBlank()) return
+        val current = getSearchHistory().toMutableList()
+        current.removeAll { it.equals(clean, ignoreCase = true) }
+        current.add(0, clean)
+        val trimmed = current.take(15)
+        val array = JSONArray()
+        trimmed.forEach { array.put(it) }
+        prefs.edit().putString(KEY_SEARCH_HISTORY, array.toString()).apply()
+    }
+
+    fun removeSearchHistory(query: String) {
+        val clean = query.trim()
+        val current = getSearchHistory().toMutableList()
+        current.removeAll { it.equals(clean, ignoreCase = true) }
+        val array = JSONArray()
+        current.forEach { array.put(it) }
+        prefs.edit().putString(KEY_SEARCH_HISTORY, array.toString()).apply()
+    }
+
+    fun clearSearchHistory() {
+        prefs.edit().remove(KEY_SEARCH_HISTORY).apply()
+    }
+
     // --- Управление темами оформления ---
 
     fun getCustomThemes(): List<CustomTheme> {
@@ -105,20 +233,28 @@ class ClientSettingsStore(context: Context) {
         textPrimary: Color,
         textSecondary: Color
     ): CustomTheme {
-        val theme = CustomTheme(
+        val currentThemes = getCustomThemes().toMutableList()
+        val newTheme = CustomTheme(
             id = UUID.randomUUID().toString(),
-            name = name.trim().ifEmpty { "Моя тема" },
+            name = name,
             accent = accent.toArgb(),
             bg = bg.toArgb(),
             surface = surface.toArgb(),
             chatBg = chatBg.toArgb(),
             textPrimary = textPrimary.toArgb(),
-            textSecondary = textSecondary.toArgb()
+            textSecondary = textSecondary.toArgb(),
+            isBuiltIn = false
         )
-        val themes = getCustomThemes().toMutableList()
-        themes.add(theme)
-        saveCustomThemes(themes)
-        return theme
+        currentThemes.add(newTheme)
+        saveCustomThemes(currentThemes)
+        return newTheme
+    }
+
+    fun renameCustomTheme(id: String, newName: String) {
+        val current = getCustomThemes().map {
+            if (it.id == id && !it.isBuiltIn) it.copy(name = newName.trim().ifEmpty { it.name }) else it
+        }
+        saveCustomThemes(current)
     }
 
     fun updateTheme(theme: CustomTheme) {
@@ -130,22 +266,10 @@ class ClientSettingsStore(context: Context) {
         }
     }
 
-    fun deleteTheme(themeId: String) {
-        val themes = getCustomThemes().toMutableList()
-        themes.removeAll { it.id == themeId }
-        saveCustomThemes(themes)
-    }
-
-    fun renameCustomTheme(id: String, newName: String) {
-        val current = getCustomThemes().map {
-            if (it.id == id) it.copy(name = newName.trim().ifEmpty { it.name }) else it
-        }
-        saveCustomThemes(current)
-    }
-
-    fun deleteCustomTheme(id: String) {
-        val current = getCustomThemes().filterNot { it.id == id }
-        saveCustomThemes(current)
+    fun deleteCustomTheme(themeId: String) {
+        val currentThemes = getCustomThemes().toMutableList()
+        currentThemes.removeAll { it.id == themeId && !it.isBuiltIn }
+        saveCustomThemes(currentThemes)
     }
 
     private fun saveCustomThemes(themes: List<CustomTheme>) {
@@ -185,10 +309,15 @@ class ClientSettingsStore(context: Context) {
         private const val KEY_MINI_PLAYER_SIZE = "mini_player_size"
         private const val KEY_VIDEO_BUFFER_SECONDS = "video_buffer_seconds"
         private const val KEY_MOD_MODE_ENABLED = "mod_mode_enabled"
+        private const val KEY_MOD_SWIPE_REQUIRES_SELECTION = "mod_swipe_requires_selection"
         private const val KEY_SPLIT_LONG_MESSAGES = "split_long_messages_enabled"
         private const val KEY_HAPTIC_FEEDBACK_ENABLED = "haptic_feedback_enabled"
         private const val KEY_KILL_BACKGROUND_PROCESSES = "kill_background_processes"
         private const val KEY_SAVED_THEMES = "saved_custom_themes"
+        private const val KEY_FAVORITE_EMOTES = "favorite_emotes"
+        private const val KEY_EMOTE_CATEGORY_ORDER = "emote_category_order"
+        private const val KEY_KEEP_EMOTE_PANEL_OPEN = "keep_emote_panel_open"
+        private const val KEY_SEARCH_HISTORY = "search_history"
 
         const val COLOR_ACCENT = "color_accent"
         const val COLOR_BG = "color_bg"

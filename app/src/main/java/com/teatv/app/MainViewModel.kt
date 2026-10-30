@@ -72,7 +72,7 @@ import com.teatv.app.mod.RewardRequestItem
 import com.teatv.app.mod.UnbanRequestItem
 import com.teatv.app.screens.stream.mod.ModSliderAction
 
-enum class Screen { Auth, Home, Stream, Category, Account, Subscriptions, Channel, Vod, Settings, AccountSettings, ClientSettings }
+enum class Screen { Auth, Home, Stream, Category, Account, Subscriptions, Channel, Vod, Settings, AccountSettings, ClientSettings, EmoteOrderSettings }
 
 enum class MainTab { View, Search, Tools }
 
@@ -88,6 +88,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var isStreamMinimized by mutableStateOf(false)
         private set
 
+    var modSwipeRequiresSelection by mutableStateOf(clientSettingsStore.modSwipeRequiresSelection)
+        private set
+    var favoriteEmotes by mutableStateOf<List<Emote>>(emptyList())
+        private set
+    var emoteCategoryOrder by mutableStateOf<List<String>>(emptyList())
+        private set
+
     private val api = TwitchApi(client = PointsRepository.httpClient())
     private val tokenStore = TokenStore(app)
     val gql = TwitchGql(tokenStore, app)
@@ -96,6 +103,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     var isCurrentStreamModerator by mutableStateOf(false)
         private set
+
+    val isCurrentStreamOwner: Boolean
+        get() {
+            val t = currentStream ?: return false
+            val u = user
+            if (u != null) {
+                if (t.id == u.id || t.login.equals(u.login, ignoreCase = true)) return true
+            }
+            val storedUid = tokenStore.userId
+            val storedLogin = tokenStore.userLogin
+            if (!storedUid.isNullOrBlank() && t.id == storedUid) return true
+            if (!storedLogin.isNullOrBlank() && t.login.equals(storedLogin, ignoreCase = true)) return true
+            return false
+        }
     var selectedChatterInfo by mutableStateOf<ChatterInfo?>(null)
         private set
     var selectedChatMessage by mutableStateOf<ChatMessage?>(null)
@@ -301,7 +322,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         TeaColors.applyFromStore(clientSettingsStore)
         api.clientId = TwitchAuth.OWN_CLIENT_ID
+        favoriteEmotes = clientSettingsStore.getFavoriteEmotes()
+        emoteCategoryOrder = clientSettingsStore.getEmoteCategoryOrder()
+        emotes = emotes.copy(favorite = favoriteEmotes)
         if (tokenStore.isLoggedIn) {
+            val savedId = tokenStore.userId
+            if (!savedId.isNullOrBlank()) {
+                user = TwitchUser(
+                    id = savedId,
+                    login = tokenStore.userLogin.orEmpty(),
+                    displayName = tokenStore.userDisplayName ?: tokenStore.userLogin.orEmpty(),
+                    avatarUrl = ""
+                )
+            }
             screen = Screen.Home
             loadHomeData()
             viewModelScope.launch {
@@ -381,23 +414,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         isStreamMinimized = false
         currentStream = item
         targetFollowed = null
-        isCurrentStreamModerator = false
         selectedChatterInfo = null
         selectedChatMessage = null
         pinnedMessage = null
 
+        val isOwner = (user != null && (item.id == user?.id || item.login.equals(user?.login, ignoreCase = true))) ||
+                (!tokenStore.userId.isNullOrBlank() && item.id == tokenStore.userId) ||
+                (!tokenStore.userLogin.isNullOrBlank() && item.login.equals(tokenStore.userLogin, ignoreCase = true))
+
+        isCurrentStreamModerator = isOwner
+
         viewModelScope.launch {
-            isCurrentStreamModerator = modRepository.isModerator(
-                channelId = item.id,
-                channelLogin = item.login,
-                myUserId = user?.id,
-                myUserLogin = user?.login
-            )
+            if (!isOwner) {
+                val myId = user?.id ?: tokenStore.userId ?: try { repository.getProfile().id } catch (_: Exception) { null }
+                val myLogin = user?.login ?: tokenStore.userLogin ?: try { repository.getProfile().login } catch (_: Exception) { null }
+                isCurrentStreamModerator = modRepository.isModerator(
+                    channelId = item.id,
+                    channelLogin = item.login,
+                    myUserId = myId,
+                    myUserLogin = myLogin
+                )
+            }
             if (isCurrentStreamModerator) {
                 loadModData(item.id, item.login)
             } else {
                 try {
-                    channelModes = modRepository.fetchChannelModes(item.id, user?.id)
+                    channelModes = modRepository.fetchChannelModes(item.id, user?.id ?: tokenStore.userId)
                 } catch (_: Exception) {}
             }
         }
@@ -424,7 +466,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     Toast.makeText(getApplication(), "Бонус канала собран", Toast.LENGTH_SHORT).show()
                 },
                 onBalance = { b ->
-                    points = points?.copy(balance = b)
+                    if (!isCurrentStreamOwner) {
+                        points = points?.copy(balance = b)
+                    }
                 },
                 onRaided = {
                     Toast.makeText(getApplication(), "Рейд принят: +баллы", Toast.LENGTH_SHORT).show()
@@ -752,7 +796,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 targetUser = m.sender,
                 targetUserId = m.senderId,
                 messageId = m.id,
-                action = action
+                action = action,
+                targetUserLogin = m.senderLogin
             )
             if (ok) {
                 // Мгновенно удаляем сообщения чаттера локально
@@ -780,11 +825,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Разбан пользователя через Helix. */
-    fun unbanChatter(targetUser: String) {
+    fun unbanChatter(targetUser: String, targetUserId: String? = null, targetUserLogin: String? = null) {
         val ch = currentStream ?: return
         val me = user ?: return
         viewModelScope.launch {
-            val ok = modRepository.unbanUser(ch.id, me.id, targetUser, selectedChatterInfo?.userId)
+            val ok = modRepository.unbanUser(
+                channelId = ch.id,
+                myUserId = me.id,
+                targetUser = targetUser,
+                targetUserId = targetUserId ?: selectedChatterInfo?.userId,
+                targetUserLogin = targetUserLogin ?: selectedChatterInfo?.userLogin
+            )
             if (ok) {
                 modLogs.add(
                     0,
@@ -1145,7 +1196,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun closeStream() {
+    fun closeStream(resetScreen: Boolean = true) {
         isStreamMinimized = false
         val t = currentStream
         currentStream = null
@@ -1163,9 +1214,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         targetNotified = false
         viewers = null
         badgeMap = emptyMap()
-        emotes = EmoteBundles()
+        emotes = EmoteBundles(favorite = favoriteEmotes)
         points = null
-        screen = Screen.Home
+        if (resetScreen || screen == Screen.Stream) {
+            screen = Screen.Home
+        }
         botActive = false
 
         stopChat()
@@ -1194,6 +1247,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         PointsPubSub.stop()
+    }
+
+    /** Закрытие мини-плеера: останавливает плеер и фоновый аудиорежим, не сбрасывая текущий экран. */
+    fun closeMiniPlayer() {
+        runCatching {
+            val ctx = getApplication<Application>()
+            ctx.sendBroadcast(Intent(TeaAudioService.ACTION_DISMISS).setPackage(ctx.packageName))
+        }
+        PlayerHolder.player?.let { p ->
+            p.playWhenReady = false
+            p.stop()
+            p.clearMediaItems()
+        }
+        closeStream(resetScreen = false)
     }
 
     /** Фолоу/анфолоу через Persisted Query (веб-клиент Twitch). */
@@ -1344,9 +1411,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                     val enrichedSubs = subs
                         .filter { !it.ownerId.isNullOrBlank() && it.ownerId != "0" }
-                        .map { e ->
-                            val chName = e.ownerId?.let { knownNames[it] } ?: e.channelName ?: "Подписки"
-                            e.copy(channelName = chName)
+                        .mapNotNull { e ->
+                            val chName = e.ownerId?.let { knownNames[it] } ?: e.channelName?.takeIf { !it.equals("Подписки", ignoreCase = true) }
+                            if (chName.isNullOrBlank()) null
+                            else e.copy(channelName = chName)
                         }
                     val enrichedMine = mine.map { e ->
                         e.copy(channelName = me?.displayName ?: "Мой канал")
@@ -1368,6 +1436,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val ffzc = async { EmoteRepository.ffzChannel(t.login) }
                 val ffzg = async { EmoteRepository.ffzGlobal() }
                 EmoteBundles(
+                    favorite = clientSettingsStore.getFavoriteEmotes(),
                     user = user.await(),
                     channel = chan.await(),
                     seven = s7c.await() + s7g.await(),
@@ -1381,28 +1450,127 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Обновить баллы и награды канала. */
     fun refreshPoints(force: Boolean = false) {
         val t = currentStream ?: return
+        val isOwner = isCurrentStreamOwner
         viewModelScope.launch {
             val token = tokenStore.accessToken ?: return@launch
-            points = PointsRepository.load(t.id, token, force)
+            val loaded = PointsRepository.load(t.id, token, force)
+            points = if (isOwner && loaded != null) {
+                loaded.copy(balance = loaded.balance?.takeIf { it > 0 })
+            } else {
+                loaded
+            }
         }
     }
 
     /** Использовать награду за баллы. */
     fun redeemReward(reward: PointReward, userInput: String? = null) {
         val t = currentStream ?: return
+        val isOwner = isCurrentStreamOwner
         viewModelScope.launch {
             val token = tokenStore.accessToken ?: return@launch
-            if (PointsRepository.redeem(getApplication(), t.id, reward, userInput, token)) {
+            val success = PointsRepository.redeem(getApplication(), t.id, reward, userInput, token)
+            if (success) {
                 refreshPoints(force = true)
+            } else if (isOwner) {
+                val myName = user?.displayName ?: user?.login ?: tokenStore.userDisplayName ?: tokenStore.userLogin ?: "Стример"
+                val msgId = "redeem-owner-${System.currentTimeMillis()}"
+                val msg = ChatMessage(
+                    id = msgId,
+                    sender = myName,
+                    color = "#9146FF",
+                    text = userInput.orEmpty(),
+                    badges = listOf("broadcaster/1"),
+                    replyToId = null,
+                    replyToName = null,
+                    replyToBody = null,
+                    redemptionTitle = reward.title,
+                    redemptionIcon = reward.imageUrl
+                )
+                insertMessage(msg)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "Награда активирована: ${reward.title}", Toast.LENGTH_SHORT).show()
+                }
+                if (!userInput.isNullOrBlank()) {
+                    val hToken = tokenStore.helixToken ?: tokenStore.accessToken
+                    val myId = user?.id ?: tokenStore.userId
+                    if (hToken != null && myId != null) {
+                        try {
+                            api.sendChatMessage(t.id, myId, "[Награда: ${reward.title}] $userInput", hToken)
+                        } catch (_: Exception) {}
+                    }
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "Не удалось активировать награду", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
 
-    /** Смайл выбран: запоминаем в частые. */
+    /** Смайл выбран из панели для отправки. */
     fun pickEmote(e: Emote) {
-        emotes = emotes.copy(
-            frequent = (listOf(e) + emotes.frequent).distinctBy { it.code }.take(24)
-        )
+        // Выбор смайла
+    }
+
+    /** Переключение смайла в избранных (зажатие в панели). Возвращает true, если добавлен. */
+    fun toggleFavoriteEmote(e: Emote): Boolean {
+        val current = clientSettingsStore.getFavoriteEmotes().toMutableList()
+        val exists = current.any { it.code == e.code }
+        if (exists) {
+            current.removeAll { it.code == e.code }
+        } else {
+            current.add(0, e)
+        }
+        clientSettingsStore.saveFavoriteEmotes(current)
+        favoriteEmotes = current
+        emotes = emotes.copy(favorite = current)
+        return !exists
+    }
+
+    /** Список доступных категорий смайлов без огромной категории "Подписки". */
+    fun getAvailableEmoteCategories(): List<String> {
+        val subChannels = (mySubscriptions.map { it.broadcasterName } + emotes.user.mapNotNull { it.channelName })
+            .filter { it.isNotBlank() && !it.equals("Подписки", ignoreCase = true) }
+            .distinct()
+
+        val all = mutableListOf<String>()
+        all.addAll(subChannels)
+        all.add("Смайлы текущего канала")
+        all.add("7TV")
+        all.add("BTTV")
+        all.add("Twitch")
+
+        val saved = clientSettingsStore.getEmoteCategoryOrder()
+        if (saved.isEmpty()) return all
+
+        val ordered = saved.filter { it in all && !it.equals("Подписки", ignoreCase = true) }.toMutableList()
+        all.forEach { if (it !in ordered) ordered.add(it) }
+        return ordered
+    }
+
+    fun saveEmoteCategoryOrder(order: List<String>) {
+        val filtered = order.filter { !it.equals("Подписки", ignoreCase = true) }
+        clientSettingsStore.saveEmoteCategoryOrder(filtered)
+        emoteCategoryOrder = filtered
+    }
+
+    fun resetEmoteCategoryOrder() {
+        clientSettingsStore.saveEmoteCategoryOrder(emptyList())
+        emoteCategoryOrder = emptyList()
+    }
+
+    fun openEmoteOrderSettings() {
+        screen = Screen.EmoteOrderSettings
+    }
+
+    fun backFromEmoteOrderSettings() {
+        screen = Screen.Home
+        tab = MainTab.Tools
+    }
+
+    fun updateModSwipeRequiresSelection(enabled: Boolean) {
+        modSwipeRequiresSelection = enabled
+        clientSettingsStore.modSwipeRequiresSelection = enabled
     }
 
     fun startLogin() {
@@ -1633,19 +1801,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Отправить сообщение в чат с поддержкой безопасного автоматического разбиения длинных сообщений. */
+    /** Отправить сообщение в чат с поддержкой команд через слэш (/) и безопасного автоматического разбиения длинных сообщений. */
     fun sendChat(text: String, replyToId: String? = null) {
         val t = currentStream ?: return
+        val isOwner = isCurrentStreamOwner
         viewModelScope.launch {
-            val token = tokenStore.helixToken ?: return@launch
-            val me = try {
+            val token = tokenStore.helixToken ?: tokenStore.accessToken ?: return@launch
+            val me = user ?: try {
                 repository.getProfile()
             } catch (_: Exception) {
-                return@launch
+                null
+            } ?: tokenStore.userId?.takeIf { it.isNotBlank() }?.let { uid ->
+                TwitchUser(
+                    id = uid,
+                    login = tokenStore.userLogin.orEmpty(),
+                    displayName = tokenStore.userDisplayName ?: tokenStore.userLogin.orEmpty(),
+                    avatarUrl = ""
+                )
+            } ?: return@launch
+
+            val trimmed = text.trim()
+
+            // 1. Обработка команд чата через слэш (/)
+            if (trimmed.startsWith("/")) {
+                val broadcasterId = if (isOwner) (tokenStore.userId ?: me.id) else t.id
+                val handled = handleChatCommand(trimmed, broadcasterId, t.login, me.id, token)
+                if (handled) return@launch
             }
 
+            // 2. Обычная отправка сообщений
             if (clientSettingsStore.splitLongMessagesEnabled) {
-                val chunks = MessageSplitter.split(text)
+                val chunks = MessageSplitter.split(trimmed)
                 for (i in chunks.indices) {
                     val chunk = chunks[i]
                     val replyId = if (i == 0) replyToId else null
@@ -1671,16 +1857,393 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             } else {
-                val safeText = if (text.length > MessageSplitter.TWITCH_MAX_MESSAGE_LENGTH) {
-                    text.take(MessageSplitter.TWITCH_MAX_MESSAGE_LENGTH)
+                val safeText = if (trimmed.length > MessageSplitter.TWITCH_MAX_MESSAGE_LENGTH) {
+                    trimmed.take(MessageSplitter.TWITCH_MAX_MESSAGE_LENGTH)
                 } else {
-                    text
+                    trimmed
                 }
                 try {
                     api.sendChatMessage(t.id, me.id, safeText, token, replyToId)
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Failed to send chat message", e)
                 }
+            }
+        }
+    }
+
+    /** Предварительное кэширование ID пользователя из недавних сообщений чата перед выполнением команды. */
+    private fun cacheTargetIdFromChat(target: String) {
+        val clean = target.removePrefix("@").trim()
+        if (clean.isBlank()) return
+        val m = chatMessages.findLast {
+            it.sender.equals(clean, ignoreCase = true) || (it.senderLogin?.equals(clean, ignoreCase = true) == true)
+        }
+        if (m != null && !m.senderId.isNullOrBlank()) {
+            modRepository.cacheUserId(clean, m.senderId)
+            if (!m.senderLogin.isNullOrBlank()) {
+                modRepository.cacheUserId(m.senderLogin!!, m.senderId)
+            }
+            if (m.sender.isNotBlank()) {
+                modRepository.cacheUserId(m.sender, m.senderId)
+            }
+        }
+    }
+
+    /** Обработчик команд Twitch чата через слэш (/). */
+    private suspend fun handleChatCommand(
+        text: String,
+        channelId: String,
+        channelLogin: String,
+        myUserId: String,
+        token: String
+    ): Boolean {
+        if (!text.startsWith("/")) return false
+
+        val parts = text.substring(1).trim().split(Regex("\\s+"))
+        if (parts.isEmpty() || parts[0].isBlank()) return false
+        val cmd = parts[0].lowercase()
+        val args = parts.drop(1)
+
+        when (cmd) {
+            "mod" -> {
+                val target = args.firstOrNull()?.removePrefix("@")
+                if (target.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "Использование: /mod <пользователь>", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                cacheTargetIdFromChat(target)
+                val (ok, msg) = modRepository.addModerator(channelId, myUserId, target)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "unmod" -> {
+                val target = args.firstOrNull()?.removePrefix("@")
+                if (target.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "Использование: /unmod <пользователь>", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                cacheTargetIdFromChat(target)
+                val (ok, msg) = modRepository.removeModerator(channelId, myUserId, target)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "vip" -> {
+                val target = args.firstOrNull()?.removePrefix("@")
+                if (target.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "Использование: /vip <пользователь>", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                cacheTargetIdFromChat(target)
+                val (ok, msg) = modRepository.addVip(channelId, myUserId, target)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "unvip" -> {
+                val target = args.firstOrNull()?.removePrefix("@")
+                if (target.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "Использование: /unvip <пользователь>", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                cacheTargetIdFromChat(target)
+                val (ok, msg) = modRepository.removeVip(channelId, myUserId, target)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "ban" -> {
+                val target = args.firstOrNull()?.removePrefix("@")
+                if (target.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "Использование: /ban <пользователь> [причина]", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                cacheTargetIdFromChat(target)
+                val reason = if (args.size > 1) args.drop(1).joinToString(" ") else "Banned by command"
+                val ok = modRepository.executeSliderAction(
+                    channelId = channelId,
+                    channelLogin = channelLogin,
+                    myUserId = myUserId,
+                    targetUser = target,
+                    targetUserId = null,
+                    messageId = "",
+                    action = ModSliderAction.BAN,
+                    targetUserLogin = target,
+                    reason = reason
+                )
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        chatMessages.removeAll { it.sender.equals(target, ignoreCase = true) || (it.senderLogin?.equals(target, ignoreCase = true) == true) }
+                        Toast.makeText(getApplication(), "Пользователь @$target заблокирован", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось заблокировать @$target (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "unban" -> {
+                val target = args.firstOrNull()?.removePrefix("@")
+                if (target.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "Использование: /unban <пользователь>", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                cacheTargetIdFromChat(target)
+                val ok = modRepository.unbanUser(
+                    channelId = channelId,
+                    myUserId = myUserId,
+                    targetUser = target,
+                    targetUserId = null,
+                    targetUserLogin = target
+                )
+                withContext(Dispatchers.Main) {
+                    val msg = if (ok) "Пользователь @$target разблокирован" else "Ошибка разблокировки @$target"
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "timeout" -> {
+                val target = args.firstOrNull()?.removePrefix("@")
+                if (target.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "Использование: /timeout <пользователь> [секунды] [причина]", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                cacheTargetIdFromChat(target)
+                val sec = args.getOrNull(1)?.toIntOrNull() ?: 600
+                val reason = if (args.size > 2) args.drop(2).joinToString(" ") else "Timeout by command"
+                val ok = modRepository.timeoutUser(
+                    channelId = channelId,
+                    myUserId = myUserId,
+                    targetUser = target,
+                    durationSeconds = sec,
+                    reason = reason
+                )
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        chatMessages.removeAll { it.sender.equals(target, ignoreCase = true) || (it.senderLogin?.equals(target, ignoreCase = true) == true) }
+                        Toast.makeText(getApplication(), "Таймаут для @$target на $sec сек", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось выдать таймаут @$target (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "untimeout" -> {
+                val target = args.firstOrNull()?.removePrefix("@")
+                if (target.isNullOrBlank()) return true
+                cacheTargetIdFromChat(target)
+                val ok = modRepository.unbanUser(channelId, myUserId, target, null, target)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), if (ok) "Таймаут с @$target снят" else "Ошибка снятия таймаута", Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "clear" -> {
+                val (ok, msg) = modRepository.clearChat(channelId, myUserId)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        chatMessages.clear()
+                    }
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "slow" -> {
+                val firstArg = args.firstOrNull()?.lowercase()
+                val isTurnOff = firstArg == "off" || firstArg == "0"
+                val sec = if (isTurnOff) 0 else (firstArg?.toIntOrNull() ?: 30)
+                val ok = modRepository.setSlowMode(channelId, myUserId, sec)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(slowModeSeconds = sec)
+                        val msg = if (sec > 0) "Медленный режим включен: $sec сек" else "Медленный режим выключен"
+                        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось изменить медленный режим (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "slowoff" -> {
+                val ok = modRepository.setSlowMode(channelId, myUserId, 0)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(slowModeSeconds = 0)
+                        Toast.makeText(getApplication(), "Медленный режим выключен", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось выключить медленный режим (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "followers" -> {
+                val firstArg = args.firstOrNull()?.lowercase()
+                val isTurnOff = firstArg == "off"
+                val min = if (isTurnOff) -1 else (firstArg?.toIntOrNull() ?: 0)
+                val ok = modRepository.setFollowersMode(channelId, myUserId, min)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(followersDurationMinutes = min)
+                        val msg = if (min >= 0) "Режим 'Только фолловеры' включен ($min мин)" else "Режим фолловеров выключен"
+                        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось изменить режим фолловеров (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "followersoff" -> {
+                val ok = modRepository.setFollowersMode(channelId, myUserId, -1)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(followersDurationMinutes = -1)
+                        Toast.makeText(getApplication(), "Режим фолловеров выключен", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось выключить режим фолловеров (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "subscribers", "sub" -> {
+                val firstArg = args.firstOrNull()?.lowercase()
+                val enabled = firstArg != "off"
+                val ok = modRepository.setSubOnlyMode(channelId, myUserId, enabled)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(subOnly = enabled)
+                        val msg = if (enabled) "Режим 'Только сабы' включен" else "Режим 'Только сабы' выключен"
+                        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось изменить режим 'Только сабы' (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "subscribersoff", "suboff" -> {
+                val ok = modRepository.setSubOnlyMode(channelId, myUserId, false)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(subOnly = false)
+                        Toast.makeText(getApplication(), "Режим 'Только сабы' выключен", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось выключить режим 'Только сабы' (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "emoteonly", "emotes" -> {
+                val firstArg = args.firstOrNull()?.lowercase()
+                val enabled = firstArg != "off"
+                val ok = modRepository.setEmoteOnlyMode(channelId, myUserId, enabled)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(emoteOnly = enabled)
+                        val msg = if (enabled) "Режим 'Только смайлы' включен" else "Режим 'Только смайлы' выключен"
+                        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось изменить режим 'Только смайлы' (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "emoteonlyoff", "emotesoff" -> {
+                val ok = modRepository.setEmoteOnlyMode(channelId, myUserId, false)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(emoteOnly = false)
+                        Toast.makeText(getApplication(), "Режим 'Только смайлы' выключен", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось выключить режим 'Только смайлы' (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "announce" -> {
+                val announceText = args.joinToString(" ")
+                if (announceText.isNotBlank()) {
+                    val ok = modRepository.sendAnnouncement(channelId, myUserId, announceText)
+                    withContext(Dispatchers.Main) {
+                        if (ok) {
+                            Toast.makeText(getApplication(), "Анонс отправлен в чат", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(getApplication(), "Не удалось отправить анонс (проверьте права)", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                return true
+            }
+            "shield" -> {
+                val newShield = !channelModes.shieldMode
+                val ok = modRepository.setShieldMode(channelId, myUserId, newShield)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        channelModes = channelModes.copy(shieldMode = newShield)
+                        Toast.makeText(getApplication(), if (newShield) "Режим щита включен" else "Режим щита выключен", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(getApplication(), "Не удалось изменить режим щита (проверьте права)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return true
+            }
+            "commercial" -> {
+                val sec = args.firstOrNull()?.toIntOrNull() ?: 30
+                val (ok, msg) = modRepository.startCommercial(channelId, myUserId, sec)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "color" -> {
+                val colorArg = args.firstOrNull()
+                if (colorArg.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(getApplication(), "Использование: /color <название_цвета или hex>", Toast.LENGTH_SHORT).show()
+                    }
+                    return true
+                }
+                val (ok, msg) = modRepository.setChatColor(myUserId, colorArg)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            "help" -> {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        getApplication(),
+                        "Команды: /mod, /unmod, /vip, /unvip, /ban, /unban, /timeout, /untimeout, /clear, /slow, /slowoff, /followers, /subscribers, /emoteonly, /announce, /shield, /commercial, /color",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return true
+            }
+            else -> {
+                // Если команда не из модераторских перехватов (например /me или кастомная),
+                // отправляем её в чат целиком без дробления MessageSplitter
+                try {
+                    api.sendChatMessage(channelId, myUserId, text, token)
+                } catch (e: Exception) {
+                    Log.w("MainViewModel", "Command send failed: $text", e)
+                }
+                return true
             }
         }
     }
@@ -1739,6 +2302,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 screen = Screen.Auth
                 return@launch
             }
+            tokenStore.userId = user?.id
+            tokenStore.userLogin = user?.login
+            tokenStore.userDisplayName = user?.displayName
             // Оптимизация подгрузки: параллельная загрузка всех данных пачкой
             val channelDeferred = async {
                 try { repository.getMyChannel() } catch (_: Exception) { null }

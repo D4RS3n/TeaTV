@@ -24,7 +24,7 @@ class WebLoginActivity : Activity() {
 
     companion object {
         private const val REDIRECT = "http://localhost:4343/callback"
-        private const val SCOPES = "user:read:email user:read:follows user:read:subscriptions channel:read:subscriptions user:read:emotes user:read:chat user:write:chat moderator:read:chatters moderator:manage:chat_messages moderator:manage:banned_users moderator:read:banned_users moderator:read:chat_settings moderator:manage:chat_settings moderator:manage:announcements moderator:read:unban_requests moderator:manage:unban_requests moderator:read:shield_mode moderator:manage:shield_mode moderator:read:followers channel:read:redemptions channel:manage:redemptions channel:read:predictions channel:manage:predictions"
+        private const val SCOPES = "user:read:email user:read:follows user:read:subscriptions channel:read:subscriptions user:read:emotes user:read:chat user:write:chat user:manage:chat_color moderator:read:chatters moderator:manage:chat_messages moderator:manage:banned_users moderator:read:banned_users moderator:read:chat_settings moderator:manage:chat_settings moderator:manage:announcements moderator:read:unban_requests moderator:manage:unban_requests moderator:read:shield_mode moderator:manage:shield_mode moderator:read:followers channel:read:redemptions channel:manage:redemptions channel:read:predictions channel:manage:predictions channel:manage:moderators channel:manage:vips channel:edit:commercial channel:manage:broadcast"
 
         private val DARK_JS = """
             (function(){

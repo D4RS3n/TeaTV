@@ -16,7 +16,7 @@ data class Emote(
 
 /** Все пачки смайлов для панели. */
 data class EmoteBundles(
-    val frequent: List<Emote> = emptyList(),
+    val favorite: List<Emote> = emptyList(),
     val user: List<Emote> = emptyList(),
     val channel: List<Emote> = emptyList(),
     val seven: List<Emote> = emptyList(),

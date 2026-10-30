@@ -520,7 +520,7 @@ class TwitchGql(
         // Ветка 1: GQL через веб-ключ.
         try {
             val r = queryWeb(
-                """{"query":"query VideoCommentsByOffset(${'$'}id: ID!, ${'$'}off: Int!) { video(id: ${'$'}id) { comments(contentOffsetSeconds: ${'$'}off, first: 50) { edges { node { id contentOffsetSeconds commenter { displayName } message { userColor fragments { text } } } } } } }","variables":{"id":"$videoId","off":$contentOffsetSeconds}}"""
+                """{"query":"query VideoCommentsByOffset(${'$'}id: ID!, ${'$'}off: Int!) { video(id: ${'$'}id) { comments(contentOffsetSeconds: ${'$'}off, first: 50) { edges { node { id contentOffsetSeconds commenter { id login displayName } message { userColor fragments { text } } } } } } }","variables":{"id":"$videoId","off":$contentOffsetSeconds}}"""
             )
             if (!r.contains("\"errors\"")) {
                 val edges = JSONObject(r).optJSONObject("data")
@@ -539,7 +539,10 @@ class TwitchGql(
                                 }
                             }
                         }
-                        val sender = node.optJSONObject("commenter")?.optString("displayName") ?: "Unknown"
+                        val commenterObj = node.optJSONObject("commenter")
+                        val sender = commenterObj?.optString("displayName") ?: "Unknown"
+                        val senderId = commenterObj?.optString("id")?.takeIf { it.isNotBlank() }
+                        val senderLogin = commenterObj?.optString("login")?.takeIf { it.isNotBlank() }
                         val userColor = node.optJSONObject("message")?.optString("userColor")
                         val offSec = node.optInt("contentOffsetSeconds", contentOffsetSeconds)
                         out += ChatMessage(
@@ -551,6 +554,8 @@ class TwitchGql(
                             replyToId = null,
                             replyToName = null,
                             replyToBody = null,
+                            senderId = senderId,
+                            senderLogin = senderLogin,
                             offsetSeconds = offSec
                         )
                     }
@@ -596,7 +601,10 @@ class TwitchGql(
                             }
                         }
                     }
-                    val sender = c.optJSONObject("commenter")?.optString("display_name") ?: "Unknown"
+                    val commenterObj = c.optJSONObject("commenter")
+                    val sender = commenterObj?.optString("display_name") ?: "Unknown"
+                    val senderId = commenterObj?.optString("_id")?.takeIf { it.isNotBlank() }
+                    val senderLogin = commenterObj?.optString("name")?.takeIf { it.isNotBlank() }
                     val userColor = c.optJSONObject("message")?.optString("user_color")
                     val offSec = c.optDouble("content_offset_seconds", contentOffsetSeconds.toDouble()).toInt()
                     out += ChatMessage(
@@ -608,6 +616,8 @@ class TwitchGql(
                         replyToId = null,
                         replyToName = null,
                         replyToBody = null,
+                        senderId = senderId,
+                        senderLogin = senderLogin,
                         offsetSeconds = offSec
                     )
                 }

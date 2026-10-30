@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -133,18 +134,19 @@ fun MiniPlayerOverlay(
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(20.dp)
+                    .padding(6.dp)
+                    .size(30.dp)
                     .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.6f))
+                    .background(Color.Black.copy(alpha = 0.75f))
                     .clickable { onClose() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "✕",
                     color = Color.White,
-                    fontSize = 11.sp,
-                    lineHeight = 11.sp
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 15.sp
                 )
             }
         }

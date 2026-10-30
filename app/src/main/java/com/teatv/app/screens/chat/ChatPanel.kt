@@ -58,6 +58,14 @@ import androidx.compose.animation.slideInVertically
 
 import androidx.compose.animation.slideOutVertically
 
+import androidx.compose.animation.expandVertically
+
+import androidx.compose.animation.shrinkVertically
+
+import androidx.compose.foundation.lazy.LazyRow
+
+import com.teatv.app.settings.ClientSettingsStore
+
 import androidx.compose.foundation.clickable
 
 import androidx.compose.foundation.layout.Spacer
@@ -208,6 +216,33 @@ import kotlin.math.exp
 
 import kotlin.math.roundToInt
 
+private data class ChatCommandHint(val name: String, val syntax: String, val desc: String)
+
+private val ALL_CHAT_COMMANDS = listOf(
+    ChatCommandHint("/mod", "<user>", "Назначить модератора"),
+    ChatCommandHint("/unmod", "<user>", "Снять модератора"),
+    ChatCommandHint("/vip", "<user>", "Назначить VIP"),
+    ChatCommandHint("/unvip", "<user>", "Снять VIP"),
+    ChatCommandHint("/timeout", "<user> [сек]", "Таймаут"),
+    ChatCommandHint("/untimeout", "<user>", "Снять таймаут"),
+    ChatCommandHint("/ban", "<user> [причина]", "Заблокировать чаттера"),
+    ChatCommandHint("/unban", "<user>", "Разблокировать чаттера"),
+    ChatCommandHint("/clear", "", "Очистить чат"),
+    ChatCommandHint("/slow", "[сек]", "Медленный режим"),
+    ChatCommandHint("/slowoff", "", "Выключить медленный режим"),
+    ChatCommandHint("/followers", "[мин]", "Режим фолловеров"),
+    ChatCommandHint("/followersoff", "", "Выключить режим фолловеров"),
+    ChatCommandHint("/subscribers", "", "Режим сабов"),
+    ChatCommandHint("/subscribersoff", "", "Выключить режим сабов"),
+    ChatCommandHint("/emoteonly", "", "Режим смайлов"),
+    ChatCommandHint("/emoteonlyoff", "", "Выключить режим смайлов"),
+    ChatCommandHint("/announce", "<текст>", "Цветное объявление"),
+    ChatCommandHint("/shield", "", "Режим щита"),
+    ChatCommandHint("/commercial", "[30..180]", "Запустить рекламу"),
+    ChatCommandHint("/color", "<цвет>", "Цвет ника в чате"),
+    ChatCommandHint("/help", "", "Справка по командам")
+)
+
 @Composable
 
 fun ChatPanel(
@@ -228,6 +263,10 @@ fun ChatPanel(
 
     onPickEmote: (Emote) -> Unit,
 
+    onToggleFavoriteEmote: (Emote) -> Boolean = { false },
+
+    categoryOrder: List<String> = emptyList(),
+
     isBot: Boolean, onBotToggle: (Boolean) -> Unit,
 
     modifier: Modifier = Modifier,
@@ -241,6 +280,10 @@ fun ChatPanel(
     replySettings: ReplySettings = DefaultReplySettings,
 
     isModerator: Boolean = false,
+
+    isOwner: Boolean = false,
+
+    modSwipeRequiresSelection: Boolean = true,
 
     selectedMessageId: String? = null,
 
@@ -274,6 +317,52 @@ fun ChatPanel(
 
     val context = LocalContext.current
 
+    val haptic = LocalHapticFeedback.current
+
+    val clientSettingsStore = remember(context) { ClientSettingsStore(context) }
+
+    var keepEmotePanelOpen by remember { mutableStateOf(clientSettingsStore.keepEmotePanelOpen) }
+
+    var currentInputText by remember { mutableStateOf("") }
+
+    var inputCursorPos by remember { mutableStateOf(0) }
+
+    val commandSuggestions = remember(currentInputText) {
+        if (currentInputText.startsWith("/")) {
+            val cmdPrefix = currentInputText.substringBefore(" ").lowercase()
+            if (!currentInputText.contains(" ")) {
+                ALL_CHAT_COMMANDS.filter { it.name.startsWith(cmdPrefix) }
+            } else emptyList()
+        } else emptyList()
+    }
+
+    val streamChatters = remember(messages) {
+        val list = mutableListOf<String>()
+        messages.asReversed().forEach { m ->
+            val name = m.sender.trim()
+            if (name.isNotBlank() && !list.any { it.equals(name, ignoreCase = true) }) {
+                list.add(name)
+            }
+            val login = m.senderLogin?.trim()
+            if (!login.isNullOrBlank() && !list.any { it.equals(login, ignoreCase = true) }) {
+                list.add(login)
+            }
+        }
+        list
+    }
+
+    val userSuggestions = remember(currentInputText, inputCursorPos, streamChatters) {
+        val safeLen = inputCursorPos.coerceIn(0, currentInputText.length)
+        val prefix = currentInputText.take(safeLen)
+        val lastAt = prefix.lastIndexOf('@')
+        if (lastAt >= 0 && (lastAt == 0 || prefix[lastAt - 1].isWhitespace())) {
+            val query = prefix.substring(lastAt + 1)
+            if (!query.contains(" ")) {
+                streamChatters.filter { it.startsWith(query, ignoreCase = true) }.take(8)
+            } else emptyList()
+        } else emptyList()
+    }
+
     val listState = rememberLazyListState()
 
     val scope = rememberCoroutineScope()
@@ -303,6 +392,10 @@ fun ChatPanel(
                 onSend(sendText, replyId)
 
                 et.text?.clear()
+
+                currentInputText = ""
+
+                inputCursorPos = 0
 
                 replyTo = null
 
@@ -514,6 +607,8 @@ fun ChatPanel(
 
                             isModerator = isModerator,
 
+                            modSwipeRequiresSelection = modSwipeRequiresSelection,
+
                             isSelected = isSelected,
 
                             onLongPress = { onMessageLongPress?.invoke(m) },
@@ -656,6 +751,79 @@ fun ChatPanel(
 
             }
 
+            androidx.compose.animation.AnimatedVisibility(
+                visible = commandSuggestions.isNotEmpty() || userSuggestions.isNotEmpty(),
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (commandSuggestions.isNotEmpty()) {
+                        items(commandSuggestions, key = { it.name }) { cmd ->
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(TeaColors.Surface)
+                                    .border(1.dp, TeaColors.Accent.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        editTextInstance?.setText("${cmd.name} ")
+                                        val newLen = cmd.name.length + 1
+                                        editTextInstance?.setSelection(newLen)
+                                        currentInputText = "${cmd.name} "
+                                        inputCursorPos = newLen
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(cmd.name, color = TeaColors.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                if (cmd.syntax.isNotBlank()) {
+                                    Text(" ${cmd.syntax}", color = TeaColors.TextSecondary, fontSize = 11.sp)
+                                }
+                                Text(" • ${cmd.desc}", color = TeaColors.TextSecondary.copy(alpha = 0.75f), fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    } else if (userSuggestions.isNotEmpty()) {
+                        items(userSuggestions, key = { it }) { username ->
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(TeaColors.Surface)
+                                    .border(1.dp, TeaColors.Accent.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        val cur = editTextInstance?.text
+                                        if (cur != null) {
+                                            val safeLen = inputCursorPos.coerceIn(0, cur.length)
+                                            val prefix = cur.toString().take(safeLen)
+                                            val lastAt = prefix.lastIndexOf('@')
+                                            if (lastAt >= 0) {
+                                                val queryLen = safeLen - lastAt - 1
+                                                val replaceWith = "@$username "
+                                                cur.replace(lastAt, lastAt + 1 + queryLen, replaceWith)
+                                                val newPos = (lastAt + replaceWith.length).coerceIn(0, cur.length)
+                                                editTextInstance?.setSelection(newPos)
+                                                currentInputText = cur.toString()
+                                                inputCursorPos = newPos
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            }
+                                        }
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("@", color = TeaColors.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(username, color = TeaColors.TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            }
+
             Row(
 
                 verticalAlignment = Alignment.CenterVertically,
@@ -725,6 +893,11 @@ fun ChatPanel(
                     factory = { ctx ->
 
                         object : EditText(ctx) {
+
+                            override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+                                super.onSelectionChanged(selStart, selEnd)
+                                inputCursorPos = selStart
+                            }
 
                             override fun getSelectionStart(): Int {
 
@@ -915,6 +1088,12 @@ fun ChatPanel(
 
                                     }
 
+                                    val str = s?.toString().orEmpty()
+
+                                    currentInputText = str
+
+                                    inputCursorPos = selectionStart.coerceAtLeast(0)
+
                                 }
 
                             })
@@ -1065,6 +1244,15 @@ fun ChatPanel(
 
             bundles = emotes,
 
+            categoryOrder = categoryOrder,
+
+            keepOpen = keepEmotePanelOpen,
+
+            onKeepOpenChange = {
+                keepEmotePanelOpen = it
+                clientSettingsStore.keepEmotePanelOpen = it
+            },
+
             onPick = { e ->
 
                 editTextInstance?.let { et ->
@@ -1076,6 +1264,8 @@ fun ChatPanel(
                 onPickEmote(e)
 
             },
+
+            onToggleFavorite = onToggleFavoriteEmote,
 
             onDismiss = { showEmotes = false }
 
@@ -1092,6 +1282,8 @@ fun ChatPanel(
             onRedeem = { r, input -> onRedeemReward(r, input) },
 
             isBot = isBot, onBotToggle = onBotToggle,
+
+            isOwner = isOwner,
 
             onDismiss = { showPoints = false }
 
@@ -1129,6 +1321,8 @@ private fun MessageRow(
 
     isModerator: Boolean = false,
 
+    modSwipeRequiresSelection: Boolean = true,
+
     isSelected: Boolean = false,
 
     onLongPress: () -> Unit = {},
@@ -1150,7 +1344,7 @@ private fun MessageRow(
 
     var currentModAction by remember { mutableStateOf(ModSliderAction.NONE) }
 
-    val canModSwipe = isModerator && isSelected
+    val canModSwipe = if (modSwipeRequiresSelection) isModerator && isSelected else isModerator
 
     val isReply = m.replyToId != null
 
@@ -1166,7 +1360,7 @@ private fun MessageRow(
 
     val rowBackground = when {
 
-        isSelected -> Color(0xFF5A1E28) // Благородный бордовый цвет выделения пользователя
+        isSelected -> TeaColors.ModHighlight
 
         hasTriggerWord -> replySettings.highlightColor.copy(alpha = replySettings.highlightAlpha)
 
